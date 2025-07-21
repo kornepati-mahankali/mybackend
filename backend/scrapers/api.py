@@ -1,6 +1,6 @@
-from fastapi import FastAPI, Query, Body
+from fastapi import FastAPI, Query, Body, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
-from .search import run_eproc_scraper
+from fastapi.middleware.cors import CORSMiddleware
 import os
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service
@@ -11,11 +11,11 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoSuchElementException
 from uuid import uuid4
 from threading import Lock
-from fastapi.middleware.cors import CORSMiddleware
+from .search import run_eproc_scraper
 
 app = FastAPI()
 
-# CORS middleware setup
+# CORS middleware setup (must be right after app = FastAPI())
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allow all origins for development
@@ -23,6 +23,36 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# WebSocket log manager
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+
+    async def send_log(self, message: str):
+        for connection in self.active_connections:
+            await connection.send_text(message)
+
+log_manager = ConnectionManager()
+
+@app.websocket("/ws/logs")
+async def websocket_logs(websocket: WebSocket):
+    await log_manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()  # Keep the connection open
+    except WebSocketDisconnect:
+        log_manager.disconnect(websocket)
+
+# Example usage: await log_manager.send_log("Scraping started...")
+# In your scraping logic, call this to send logs to the frontend.
 
 # In-memory session management
 sessions = {}

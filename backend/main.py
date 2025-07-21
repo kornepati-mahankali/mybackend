@@ -1,9 +1,14 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from selenium import webdriver
+from selenium.webdriver.edge.service import Service
+from selenium.webdriver.edge.options import Options
+import os
 
 # Ensure these imports point to actual router objects
 from backend.router import tool_runner, tools
+from backend import gem_api, eproc_api
 from supabase import create_client, Client
 
 supabase_url = "https://zjfjaezztfydiryzsyvd.supabase.co"
@@ -24,6 +29,38 @@ app.add_middleware(
 # Include your routers
 app.include_router(tool_runner.router)
 app.include_router(tools.router)
+app.mount("/gem", gem_api.app)
+app.mount("/eproc", eproc_api.app)
+
+@app.post('/api/open-edge')
+async def open_edge(request: Request):
+    data = await request.json()
+    url = data.get('url')
+    if not url:
+        return JSONResponse({'error': 'No URL provided'}, status_code=400)
+    try:
+        # Try to use the existing WebDriver first
+        DRIVER_PATH = os.path.abspath('scrapers/edgedriver_win64/msedgedriver.exe')
+        options = Options()
+        options.add_experimental_option("detach", True)  # Keeps the browser open after script ends
+        options.add_argument("--ignore-certificate-errors")
+        options.add_argument("--ignore-ssl-errors")
+        options.add_argument("--ignore-certificate-errors-spki-list")
+        
+        try:
+            service = Service(executable_path=DRIVER_PATH)
+            driver = webdriver.Edge(service=service, options=options)
+        except Exception as driver_error:
+            # If WebDriver fails, try using the system's default Edge installation
+            print(f"WebDriver error: {driver_error}")
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
+            driver = webdriver.Edge(options=options)
+        
+        driver.get(url)
+        return JSONResponse({'status': 'success'}, status_code=200)
+    except Exception as e:
+        return JSONResponse({'error': str(e)}, status_code=500)
 
 @app.get("/api/dashboard-overview")
 def dashboard_overview():

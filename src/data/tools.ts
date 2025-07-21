@@ -5,9 +5,58 @@ export const tools: Tool[] = [
     id: '1',
     name: 'Gem Portal Scraper',
     category: 'gem',
-    description: 'Extract tender data from Government e-Marketplace portal',
-    states: ['Delhi', 'Mumbai', 'Chennai', 'Kolkata', 'Bangalore', 'Hyderabad', 'Pune', 'Ahmedabad'],
-    icon: 'gem'
+    description: 'Scrapes data from the GEM website and generates Excel files for each page. Creates \'gem/scrapedfiles\' directory structure.',
+    icon: 'gem',
+    valid_states: [
+      "ANDAMAN & NICOBAR", "ANDHRA PRADESH", "ARUNACHAL PRADESH", "ASSAM", "BIHAR",
+      "CHANDIGARH", "CHHATTISGARH", "DADRA & NAGAR HAVELI", "DAMAN & DIU", "DELHI",
+      "GOA", "GUJARAT", "HARYANA", "HIMACHAL PRADESH", "JAMMU & KASHMIR", "JHARKHAND",
+      "KARNATAKA", "KERALA", "LAKSHADWEEP", "MADHYA PRADESH", "MAHARASHTRA", "MANIPUR",
+      "MEGHALAYA", "MIZORAM", "NAGALAND", "ODISHA", "PUDUCHERRY", "PUNJAB", "RAJASTHAN",
+      "SIKKIM", "TAMIL NADU", "TELANGANA", "TRIPURA", "UTTAR PRADESH", "UTTARAKHAND", "WEST BENGAL"
+    ],
+    valid_cities: {
+      "DELHI": ["New Delhi", "Old Delhi", "Dwarka", "Rohini", "Pitampura"],
+      "MAHARASHTRA": ["Mumbai", "Pune", "Nagpur", "Thane", "Nashik"],
+      "TAMIL NADU": ["Chennai", "Coimbatore", "Madurai", "Salem", "Vellore"],
+      "WEST BENGAL": ["Kolkata", "Howrah", "Durgapur", "Asansol", "Siliguri"],
+      "KARNATAKA": ["Bangalore", "Mysore", "Hubli", "Mangalore", "Belgaum"],
+      "TELANGANA": ["Hyderabad", "Warangal", "Karimnagar", "Nizamabad", "Adilabad"],
+      "GUJARAT": ["Ahmedabad", "Surat", "Vadodara", "Rajkot", "Bhavnagar"],
+      "UTTAR PRADESH": ["Lucknow", "Kanpur", "Varanasi", "Agra", "Prayagraj"],
+      "BIHAR": ["Patna", "Gaya", "Bhagalpur", "Muzaffarpur", "Purnia"],
+      "ODISHA": ["Bhubaneswar", "Cuttack", "Rourkela", "Berhampur", "Sambalpur"]
+    },
+    inputs: [
+      {
+        name: 'startingpage',
+        type: 'int',
+        required: true,
+        default: 1,
+        description: 'Starting Page Number'
+      },
+      {
+        name: 'totalpages',
+        type: 'int',
+        required: true,
+        default: 5,
+        description: 'Total Pages to Scrape'
+      },
+      {
+        name: 'username',
+        type: 'string',
+        required: true,
+        default: '',
+        description: 'Username for GEM Portal'
+      },
+      {
+        name: 'days_interval',
+        type: 'int',
+        required: true,
+        default: 7,
+        description: 'Days Interval for Search'
+      }
+    ]
   },
   {
     id: '2',

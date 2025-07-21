@@ -1,4 +1,4 @@
-from flask import Flask, send_file, jsonify
+from flask import Flask, send_file, jsonify, request
 from flask_cors import CORS
 import os
 import pandas as pd
@@ -118,5 +118,51 @@ def download_all(run_id):
 def favicon():
     return '', 204
 
+@app.route('/gem/files/<run_id>', methods=['GET'])
+def gem_list_files(run_id):
+    run_dir, error = get_run_dir(run_id)
+    if error:
+        return jsonify({"error": error}), 400
+    try:
+        files = [f for f in os.listdir(run_dir) if f.endswith('.xlsx')]
+        # Return file URLs for frontend
+        file_objs = [{
+            'name': f,
+            'url': f'/api/download/{run_id}/{f}'
+        } for f in files]
+        return jsonify({'files': file_objs})
+    except FileNotFoundError:
+        return jsonify({'files': []})
+
+@app.route('/gem/files/<run_id>/<filename>', methods=['DELETE'])
+def gem_delete_file(run_id, filename):
+    run_dir, error = get_run_dir(run_id)
+    if error:
+        return jsonify({"error": error}), 400
+    file_path = os.path.join(run_dir, filename)
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        return jsonify({'success': True})
+    else:
+        return jsonify({'success': False, 'error': 'File not found'}), 404
+
+@app.route('/gem/files/<run_id>/merge', methods=['POST'])
+def gem_merge_files(run_id):
+    run_dir, error = get_run_dir(run_id)
+    if error:
+        return jsonify({"error": error}), 400
+    files = [f for f in os.listdir(run_dir) if f.endswith('.xlsx')]
+    if not files:
+        return jsonify({'error': 'No files to merge'}), 404
+    merged_df = pd.DataFrame()
+    for file in files:
+        df = pd.read_excel(os.path.join(run_dir, file))
+        merged_df = pd.concat([merged_df, df], ignore_index=True)
+    merged_filename = f'merged_data_{run_id}.xlsx'
+    merged_filepath = os.path.join(run_dir, merged_filename)
+    with pd.ExcelWriter(merged_filepath, engine='xlsxwriter') as writer:
+        merged_df.to_excel(writer, index=False, sheet_name='MergedData')
+    return jsonify({'success': True, 'merged_file': merged_filename, 'url': f'/api/download/{run_id}/{merged_filename}'})
+
 if __name__ == '__main__':
-    app.run(port=5001, debug=True) 
+    app.run(port=5002, debug=True)

@@ -83,10 +83,11 @@ import { Tool } from '../../types';
 interface ToolsGridProps {
   category: string;
   title: string;
+  setSelectedTool: (tool: Tool) => void;
 }
 
-export const ToolsGrid: React.FC<ToolsGridProps> = ({ category, title }) => {
-  const [selectedTool, setSelectedTool] = useState<Tool | null>(null);
+export const ToolsGrid: React.FC<ToolsGridProps> = ({ category, title, setSelectedTool }) => {
+  // Remove local selectedTool state
   const [tools, setTools] = useState<Tool[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -115,10 +116,6 @@ export const ToolsGrid: React.FC<ToolsGridProps> = ({ category, title }) => {
   };
 
   const filteredTools = tools.filter(tool => tool.category === categoryMap[category] || category === 'all-tools');
-
-  if (selectedTool) {
-    return <ToolInterface tool={selectedTool} onBack={() => setSelectedTool(null)} />;
-  }
 
   return (
     <div className="space-y-6">

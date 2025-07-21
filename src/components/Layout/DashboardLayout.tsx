@@ -7,22 +7,29 @@ import { PerformanceView } from '../Performance/PerformanceView';
 import { AdminPanel } from '../Admin/AdminPanel';
 import { SuperAdminPanel } from '../SuperAdmin/SuperAdminPanel';
 import { SettingsView } from '../Settings/SettingsView';
+import { ToolInterface } from '../Tools/ToolInterface';
+import { Tool } from '../../types';
+import { useSelectedTool } from '../../contexts/SelectedToolContext';
 
 export const DashboardLayout: React.FC = () => {
   const [activeTab, setActiveTab] = useState('dashboard');
+  const { selectedTool, setSelectedTool } = useSelectedTool();
 
   const renderContent = () => {
+    if (selectedTool) {
+      return <ToolInterface tool={selectedTool} onBack={() => setSelectedTool(null)} />;
+    }
     switch (activeTab) {
       case 'dashboard':
         return <DashboardHome />;
       case 'gem-tools':
-        return <ToolsGrid category="gem-tools" title="Gem Tools" />;
+        return <ToolsGrid category="gem-tools" title="Gem Tools" setSelectedTool={setSelectedTool} />;
       case 'global-tools':
-        return <ToolsGrid category="global-tools" title="Global Tools" />;
+        return <ToolsGrid category="global-tools" title="Global Tools" setSelectedTool={setSelectedTool} />;
       case 'all-tools':
-        return <ToolsGrid category="all-tools" title="All Tools" />;
+        return <ToolsGrid category="all-tools" title="All Tools" setSelectedTool={setSelectedTool} />;
       case 'eprocurement-tools':
-        return <ToolsGrid category="eprocurement-tools" title="E-Procurement Tools" />;
+        return <ToolsGrid category="eprocurement-tools" title="E-Procurement Tools" setSelectedTool={setSelectedTool} />;
       case 'performance':
         return <PerformanceView />;
       case 'admin':

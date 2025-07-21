@@ -1,12 +1,11 @@
 # backend/routers/tools.py
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 from uuid import uuid4
 import json
 from functools import partial
 from pathlib import Path
 from backend.router.utils.runner import run_tool_background
-import subprocess
 
 router = APIRouter()
 
@@ -59,18 +58,6 @@ def run_tool(req: RunRequest, background_tasks: BackgroundTasks):
         partial(run_tool_background, str(script_path), req.inputs, run_id, log_file)
     )
     return {"run_id": run_id}
-
-@router.post("/api/open-edge")
-async def open_edge(request: Request):
-    data = await request.json()
-    url = data.get("url")
-    if url:
-        try:
-            subprocess.Popen(['start', 'msedge', url], shell=True)
-            return {"status": "ok"}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-    return {"status": "error", "message": "No URL provided"}
 
 @router.get("/log/{tool}/{run_id}")
 def read_log(tool: str, run_id: str):

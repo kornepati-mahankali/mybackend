@@ -13,14 +13,19 @@ import argparse
 
 
 # Here we are importing the attachment downloader
-# moduel whch uses cookies to download
-if __name__ == "__main__" and __package__ is None:
-    import sys
-    from pathlib import Path
-    sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
-    from backend.scrapers.downloader import *
+# module which uses cookies to download
+try:
+    from downloader import *
+except ImportError:
+    print("[WARNING] downloader module not found, attachment download disabled")
+    pass
 
-from .cap_solver import solve_captcha
+try:
+    from cap_solver import solve_captcha
+except ImportError:
+    print("[WARNING] cap_solver module not found, captcha solving disabled")
+    def solve_captcha(image_data):
+        return None
 from time import sleep
 import pandas as pd
 from os import path, makedirs
@@ -75,11 +80,14 @@ def solve_captcha_attachment(bot:webdriver.Chrome):
         return False
 
 
-def solve_captcha_main(bot:webdriver.Chrome):
+def solve_captcha_main(bot:webdriver.Chrome, captcha=None):
     WebDriverWait(bot, TIMEOUT).until(EC.element_to_be_clickable((By.ID, "captchaImage")))
 
     image_data = bot.find_element(By.ID, "captchaImage").get_attribute("src")
-    solvcap=input("enter captcha:").strip()       
+    if captcha is not None:
+        solvcap = captcha.strip()
+    else:
+        solvcap = input("enter captcha:").strip()       
     bot.find_element(By.ID, "captchaText").send_keys(solvcap)
     
     sleep(2)
@@ -405,17 +413,17 @@ def get_attachment(bot:webdriver.Chrome, tender_id, is_cap_solved=False):
     except:
         return []
 
-def save_to_excel(data_list, idx):
+def save_to_excel(data_list, idx, file_name):
               
     headers = (["Bid User", "Tender ID", "Name of Work", "Tender Category", "Department", "Quantity", "EMD", "Exemption", 
                 "ECV", "State Name", "Location", "Apply Mode", "Website", "Document Link", "Closing Date", "Pincode", "Attachments"])
 
-    file_path = path.join(OUTPUT_DIR , FILE_NAME.format(idx))
+    file_path = path.join(OUTPUT_DIR , file_name.format(idx))
     writer = pd.ExcelWriter(file_path, engine='xlsxwriter',date_format = "dd-mm-yyyy",datetime_format = "dd-mm-yyyy hh:mm:ss")
     writer.book.strings_to_urls = False
     df = pd.DataFrame(data_list, columns=headers)
     if 'Closing Date' in df.columns:
-        df['Closing Date'] = pd.to_datetime(df['Closing Date'], errors='coerce')
+        df['Closing Date'] = pd.to_datetime(df['Closing Date'], format='%d/%m/%Y', errors='coerce')
     df.to_excel(writer, index=False)
     workbook = writer.book
     worksheet = writer.sheets[list(writer.sheets.keys())[0]]
@@ -431,44 +439,36 @@ def save_to_excel(data_list, idx):
 
     return file_path
 
-def get_all_detail(bot: webdriver.Chrome, tender_links):
+def get_all_detail(bot: webdriver.Chrome, tender_links, base_url, log=None):
     all_detail = []
-
     for idx, link in enumerate(tender_links):
-        print(f"[BIDALERT INFO] GETTING TENDER [{idx+1}/{len(tender_links)}]")
-
-        # Open link in background tab
+        msg = f"[BIDALERT INFO] GETTING TENDER [{idx+1}/{len(tender_links)}]"
+        if log:
+            log(msg)
+        print(msg)  # Always print for backend terminal
         bot.execute_script("window.open(arguments[0]);", link)
         bot.switch_to.window(bot.window_handles[1])
-
         try:
             WebDriverWait(bot, 10).until(EC.presence_of_element_located((By.CLASS_NAME, "page_content")))
-            
             organisation_chain, _, tender_id, _, tender_category = get_basic_details(bot)
             _, _, exepm_allowed = get_fee_details(bot)
             emd_amout, _, emd_exepm_allowed = get_emd_details(bot)
             title, word_desc, tander_value_in, location, pincode, _, _ = get_work_details(bot)
             published_date, bid_sub_end_date = get_critical_dates(bot)
-
-            # Skip attachment download for speed or enable if needed
-            attachment_links = ""  # Skip this for now
-            # attachment_links = get_attachment(bot, tender_id=tender_id)
-            # attachment_links = ",".join(list(set(ATTACHMENT_PATHS)))
-
+            attachment_links = ""
             all_detail.append([
                 '', tender_id, word_desc, tender_category, organisation_chain, '',
                 emd_amout, emd_exepm_allowed, tander_value_in, '', location, 'Online',
-                BASE_URL, '', bid_sub_end_date, pincode, attachment_links
+                base_url, '', bid_sub_end_date, pincode, attachment_links
             ])
-        
         except Exception as e:
-            print(f"[ERROR] Skipping tender due to error: {e}")
-        
+            err_msg = f"[ERROR] Skipping tender due to error: {e}"
+            if log:
+                log(err_msg)
+            print(err_msg)
         finally:
-            # Close current tab and switch back
             bot.close()
             bot.switch_to.window(bot.window_handles[0])
-
     return all_detail
 
     
@@ -529,7 +529,7 @@ def start():
             if "DirectLink" in link:
                 tender_links.append(link)
 
-        for d in get_all_detail(bot, tender_links):
+        for d in get_all_detail(bot, tender_links, URL):
             all_detail.append(d)
 
         # if len(all_detail) % 20 == 0:
@@ -554,123 +554,244 @@ def run_eproc_scraper(
     base_url,
     tender_type,
     days_interval,
-    start_page
+    start_page,
+    captcha=None
 ):
-    global BASE_URL, URL, NEXT_PAGE_URL, FILE_NAME
-    BASE_URL = base_url
-    URL = f"{BASE_URL}?page=FrontEndAdvancedSearch&service=page"
-    NEXT_PAGE_URL = f"{BASE_URL}?component=%24TablePages.linkPage&page=FrontEndAdvancedSearchResult&service=direct&session=T&sp=AFrontEndAdvancedSearchResult%2Ctable&sp="
-
-    options = Options()
-    prefs = {"download_restrictions": 3}
-    options.add_experimental_option(
-        "prefs", prefs
-    )
-    PATH = BASE_DIR + "\\edgedriver_win64\\msedgedriver.exe"
-    chromedriver_path = PATH
-    servicee = Service(executable_path=chromedriver_path)
-    bot = webdriver.Edge(service=servicee, options=options)
-    bot.minimize_window()
-    bot.get(URL)
+    print(f"[DEBUG] Starting run_eproc_scraper with base_url={base_url}, tender_type={tender_type}, days_interval={days_interval}, start_page={start_page}, captcha={captcha}")
     try:
-        close_button = bot.find_element(By.CLASS_NAME, "alertbutclose")
-        close_button.click()
-        print("Popup closed.")
-    except NoSuchElementException:
-        print("Popup not present.")
-
-    print("[BIDALERT INFO] WELCOME ** BID ALERT *** USER :: PAGE LOADED ")    
-    sleep(2)
-
-    # --- select_options logic, but with arguments ---
-    WebDriverWait(bot, TIMEOUT).until(EC.element_to_be_clickable((By.ID, "captchaImage")))
-    bot.find_element(By.ID, "dateCriteria").click()
-    bot.find_element(By.ID, "dateCriteria").send_keys("Published Date")
-    bot.find_element(By.ID, "dateCriteria").click()
-
-    if (tender_type.lower() == 'o'):
-        bot.find_element(By.ID, "TenderType").click()
-        bot.find_element(By.ID, "TenderType").send_keys("Open Tender")
-        bot.find_element(By.ID, "TenderType").click()
-        FILE_NAME = "open-tenders_output_page-{}.xlsx"
-    elif (tender_type.lower() == 'l'):
-        bot.find_element(By.ID, "TenderType").click()
-        bot.find_element(By.ID, "TenderType").send_keys("Limited Tender")
-        bot.find_element(By.ID, "TenderType").click()
-        FILE_NAME = "limited-tenders_output_page-{}.xlsx"
-    else:
-        FILE_NAME = "tenders_output_page-{}.xlsx"
-
-    bot.execute_script('document.getElementById("fromDate").removeAttribute("readonly")')
-    bot.execute_script('document.getElementById("toDate").removeAttribute("readonly")')
-    if (days_interval == 1):
-        yesterday = today - timedelta(days=1)
-        new_yesterday_date = yesterday.strftime("%d/%m/%Y")
-        bot.find_element(By.ID, "fromDate").clear()
-        bot.find_element(By.ID, "fromDate").send_keys(new_yesterday_date)
-        bot.find_element(By.ID, "toDate").clear()
-        bot.find_element(By.ID, "toDate").send_keys(new_yesterday_date)
-    elif (days_interval > 1):
-        yesterday = today - timedelta(days=days_interval)
-        new_yesterday_date = yesterday.strftime("%d/%m/%Y")
-        yesterday2 = today - timedelta(days=1)
-        new_yesterday2_date = yesterday2.strftime("%d/%m/%Y")
-        bot.find_element(By.ID, "fromDate").clear()
-        bot.find_element(By.ID, "fromDate").send_keys(new_yesterday_date)
-        bot.find_element(By.ID, "toDate").clear()
-        bot.find_element(By.ID, "toDate").send_keys(new_yesterday2_date)
-
-    # --- captcha handling ---
-    while True:
-        did_handle_cap = solve_captcha_main(bot)
-        if did_handle_cap:
-            break
-
-    # GETTING TOTAL PAGES COUNT
-    try:
-        list_footer = bot.find_element(By.CLASS_NAME, "list_footer")
-        total_pages = list_footer.find_element(By.ID, "linkLast").get_attribute("href").split("=")[-1].strip()
-        total_pages = int(total_pages)
-    except:
-        total_pages = 1
-    print(f"[BIDALERT INFO] FOUND {total_pages} PAGES TO SCRAPE")
-
-    bot.maximize_window()
-    excel_files = []
-    for idx in range(start_page, total_pages + 1):
-        all_detail = []
-        print(f"[BIDALERT INFO] SCRAPING PAGE [{idx}/{total_pages}]")
-        list_table = bot.find_element(By.ID, "table")
-        a_tags = list_table.find_elements(By.TAG_NAME, "a")
-        tender_links = []
-        for a_tag in a_tags:
-            link = a_tag.get_attribute("href")
-            if link and "DirectLink" in link:
-                tender_links.append(link)
-        for d in get_all_detail(bot, tender_links):
-            all_detail.append(d)
-        print(f"[BIDALERT INFO] SAVING LAST {len(all_detail)} TENDER DETAILS TO EXCEL FILE")
-        excel_path = save_to_excel(all_detail, idx)
-        excel_files.append(excel_path)
-        print(f"[BIDALERT INFO] LAST {len(all_detail)} TENDER DETAILS ARE SAVED TO EXCEL FILE {excel_path}")
-        print("-" * 300)
-        next_page_url = NEXT_PAGE_URL + str(idx + 1)
-        bot.get(next_page_url)
+        options = Options()
+        # options.add_argument('--headless')  # Temporarily disable headless mode for debugging
+        options.add_argument('--disable-gpu')
+        prefs = {"download_restrictions": 3}
+        options.add_experimental_option("prefs", prefs)
+        PATH = BASE_DIR + "\\edgedriver_win64\\msedgedriver.exe"
+        chromedriver_path = PATH
+        servicee = Service(executable_path=chromedriver_path)
+        bot = webdriver.Edge(service=servicee, options=options)
+        bot.minimize_window()
+        # Construct the URL for advanced search
+        URL = f"{base_url}?page=FrontEndAdvancedSearch&service=page"
+        print(f"[DEBUG] Navigating to URL: {URL}")
+        bot.get(URL)
+        try:
+            close_button = bot.find_element(By.CLASS_NAME, "alertbutclose")
+            close_button.click()
+            print("[DEBUG] Popup closed.")
+        except NoSuchElementException:
+            print("[DEBUG] Popup not present.")
+        print("[BIDALERT INFO] WELCOME ** BID ALERT *** USER :: PAGE LOADED ")    
+        sleep(2)
+        print("[DEBUG] Setting tender type and date interval...")
+        # Set tender type and days interval using arguments
+        # select_options logic, but use arguments instead of input()
+        WebDriverWait(bot, TIMEOUT).until(EC.element_to_be_clickable((By.ID, "captchaImage")))
+        bot.find_element(By.ID, "dateCriteria").click()
+        bot.find_element(By.ID, "dateCriteria").send_keys("Published Date")
+        bot.find_element(By.ID, "dateCriteria").click()    
+        global FILE_NAME
+        if (tender_type.lower() == 'o'):
+            bot.find_element(By.ID, "TenderType").click()
+            bot.find_element(By.ID, "TenderType").send_keys("Open Tender")
+            bot.find_element(By.ID, "TenderType").click()
+            FILE_NAME = "open-tenders_output_page-{}.xlsx"
+        elif (tender_type.lower() == 'l'):
+            bot.find_element(By.ID, "TenderType").click()
+            bot.find_element(By.ID, "TenderType").send_keys("Limited Tender")
+            bot.find_element(By.ID, "TenderType").click()
+            FILE_NAME = "limited-tenders_output_page-{}.xlsx"
+        bot.execute_script('document.getElementById("fromDate").removeAttribute("readonly")')
+        bot.execute_script('document.getElementById("toDate").removeAttribute("readonly")')
+        days_interval = int(days_interval)
+        if (days_interval == 1):
+            yesterday = today - timedelta(days = 1)
+            new_yesterday_date = yesterday.strftime("%d/%m/%Y")
+            bot.find_element(By.ID, "fromDate").clear()
+            bot.find_element(By.ID, "fromDate").send_keys(new_yesterday_date)    
+            bot.find_element(By.ID, "toDate").clear()
+            bot.find_element(By.ID, "toDate").send_keys(new_yesterday_date)
+        elif (days_interval > 1):        
+            yesterday = today - timedelta(days = days_interval)
+            new_yesterday_date = yesterday.strftime("%d/%m/%Y")
+            yesterday2 = today - timedelta(days = 1)
+            new_yesterday2_date = yesterday2.strftime("%d/%m/%Y")
+            bot.find_element(By.ID, "fromDate").clear()
+            bot.find_element(By.ID, "fromDate").send_keys(new_yesterday_date)    
+            bot.find_element(By.ID, "toDate").clear()
+            bot.find_element(By.ID, "toDate").send_keys(new_yesterday2_date)
+        print("[DEBUG] Solving captcha...")
+        # Solve captcha manually or with provided value
+        while True:
+            did_handle_cap = solve_captcha_main(bot, captcha)
+            if did_handle_cap or captcha is not None:
+                break
+        print("[DEBUG] Captcha solved, getting total pages count...")
+        # GETTING TOTAL PAGES COUNT
+        try:
+            list_footer = bot.find_element(By.CLASS_NAME, "list_footer")
+            total_pages = list_footer.find_element(By.ID, "linkLast").get_attribute("href").split("=")[-1].strip()
+            total_pages = int(total_pages)
+        except Exception as e:
+            print(f"[ERROR] Could not get total pages: {e}")
+            total_pages = 1
+        print(f"[BIDALERT INFO] FOUND {total_pages} PAGES TO SCRAPE")
+        start_page = int(start_page)
+        bot.maximize_window()
+        for idx in range(start_page, total_pages + 1):
+            all_detail = []
+            print(f"[BIDALERT INFO] SCRAPING PAGE [{idx}/{total_pages}]")
+            try:
+                list_table = bot.find_element(By.ID, "table")
+                a_tags = list_table.find_elements(By.TAG_NAME, "a")
+                tender_links = []
+                for a_tag in a_tags:
+                    link = a_tag.get_attribute("href")
+                    if "DirectLink" in link:
+                        tender_links.append(link)
+                print(f"[DEBUG] Found {len(tender_links)} tender links on page {idx}")
+                for d in get_all_detail(bot, tender_links, base_url):
+                    all_detail.append(d)
+            except Exception as e:
+                print(f"[ERROR] Exception during page scraping [{idx}]: {e}")
+            print(f"[BIDALERT INFO] SAVING LAST {len(all_detail)} TENDER DETAILS TO EXCEL FILE")
+            try:
+                excel_path = save_to_excel(all_detail, idx)
+                print(f"[BIDALERT INFO] LAST {len(all_detail)} TENDER DETAILS ARE SAVED TO EXCEL FILE {excel_path}")
+            except Exception as e:
+                print(f"[ERROR] Exception during saving Excel file for page {idx}: {e}")
+            print("-" * 60)
+            # GOING TO NEXT PAGE
+            try:
+                next_page_url = f"{bot.current_url.split('?')[0]}?component=%24TablePages.linkPage&page=FrontEndAdvancedSearchResult&service=direct&session=T&sp=AFrontEndAdvancedSearchResult%2Ctable&sp={idx+1}"
+                print(f"[DEBUG] Navigating to next page: {next_page_url}")
+                bot.get(next_page_url)
+            except Exception as e:
+                print(f"[ERROR] Exception during navigation to next page: {e}")
+        print("[INFO] E-PROC SCRAPING COMPLETED")
+    except Exception as e:
+        print(f"[ERROR] Exception during scraping: {e}")
+    print("[BIDALERT INFO] Edge browser closed after scraping.")
     bot.quit()
-    # Return the last excel file path (or all if needed)
-    return excel_files[-1] if excel_files else None
 
-# Comment out the __main__ block to avoid running on import
-# if __name__ == "__main__":
-#     parser = argparse.ArgumentParser(description="E-Procurement Scraper")
-#     parser.add_argument('--base_url', required=True, help='Base URL for scraping')
-#     parser.add_argument('--tender_type', required=True, help='Tender type (O/L)')
-#     parser.add_argument('--days_interval', type=int, required=True, help='How many days back to scrape')
-#     parser.add_argument('--start_page', type=int, required=True, help='Starting page number')
-#     args = parser.parse_args()
-#     run_eproc_scraper(
-#         base_url=args.base_url,
-#         tender_type=args.tender_type,
-#         days_interval=args.days_interval,
-#         start_page=args.start_page
-#     )
+def run_eproc_scraper_with_bot(
+    bot,
+    tender_type,
+    days_interval,
+    start_page,
+    captcha=None,
+    log_callback=None,
+    base_url=None
+):
+    def log(msg):
+        if log_callback:
+            log_callback(msg)
+        else:
+            print(msg)
+
+    log("[INFO] Scraping started...")
+    try:
+        WebDriverWait(bot, 10).until(EC.element_to_be_clickable((By.ID, "captchaImage")))
+        bot.find_element(By.ID, "dateCriteria").click()
+        bot.find_element(By.ID, "dateCriteria").send_keys("Published Date")
+        bot.find_element(By.ID, "dateCriteria").click()
+        
+        file_name = ""
+        if (tender_type.lower() == 'o'):
+            bot.find_element(By.ID, "TenderType").click()
+            bot.find_element(By.ID, "TenderType").send_keys("Open Tender")
+            bot.find_element(By.ID, "TenderType").click()
+            file_name = "open-tenders_output_page-{}.xlsx"
+        elif (tender_type.lower() == 'l'):
+            bot.find_element(By.ID, "TenderType").click()
+            bot.find_element(By.ID, "TenderType").send_keys("Limited Tender")
+            bot.find_element(By.ID, "TenderType").click()
+            file_name = "limited-tenders_output_page-{}.xlsx"
+
+        bot.execute_script('document.getElementById("fromDate").removeAttribute("readonly")')
+        bot.execute_script('document.getElementById("toDate").removeAttribute("readonly")')
+        days_interval = int(days_interval)
+        if (days_interval == 1):
+            yesterday = today - timedelta(days = 1)
+            new_yesterday_date = yesterday.strftime("%d/%m/%Y")
+            bot.find_element(By.ID, "fromDate").clear()
+            bot.find_element(By.ID, "fromDate").send_keys(new_yesterday_date)    
+            bot.find_element(By.ID, "toDate").clear()
+            bot.find_element(By.ID, "toDate").send_keys(new_yesterday_date)
+        elif (days_interval > 1):        
+            yesterday = today - timedelta(days = days_interval)
+            new_yesterday_date = yesterday.strftime("%d/%m/%Y")
+            yesterday2 = today - timedelta(days = 1)
+            new_yesterday2_date = yesterday2.strftime("%d/%m/%Y")
+            bot.find_element(By.ID, "fromDate").clear()
+            bot.find_element(By.ID, "fromDate").send_keys(new_yesterday_date)    
+            bot.find_element(By.ID, "toDate").clear()
+            bot.find_element(By.ID, "toDate").send_keys(new_yesterday2_date)
+        # Solve captcha manually or with provided value
+        while True:
+            did_handle_cap = solve_captcha_main(bot, captcha)
+            if did_handle_cap or captcha is not None:
+                break
+        # GETTING TOTAL PAGES COUNT
+        try:
+            list_footer = bot.find_element(By.CLASS_NAME, "list_footer")
+            total_pages = list_footer.find_element(By.ID, "linkLast").get_attribute("href").split("=")[-1].strip()
+            total_pages = int(total_pages)
+        except:
+            total_pages = 1
+        log(f"[INFO] FOUND {total_pages} PAGES TO SCRAPE")
+        start_page = int(start_page)
+        bot.maximize_window()
+        for idx in range(start_page, total_pages + 1):
+            all_detail = []
+            log(f"[INFO] SCRAPING PAGE [{idx}/{total_pages}]")
+            list_table = bot.find_element(By.ID, "table")
+            a_tags = list_table.find_elements(By.TAG_NAME, "a")
+            tender_links = []
+            for a_tag in a_tags:
+                link = a_tag.get_attribute("href")
+                if "DirectLink" in link:
+                    tender_links.append(link)
+            for d in get_all_detail(bot, tender_links, base_url, log):
+                all_detail.append(d)
+            log(f"[INFO] SAVING LAST {len(all_detail)} TENDER DETAILS TO EXCEL FILE")
+            excel_path = save_to_excel(all_detail, idx, file_name)
+            log(f"[INFO] LAST {len(all_detail)} TENDER DETAILS ARE SAVED TO EXCEL FILE {excel_path}")
+            log("-" * 60)
+            # GOING TO NEXT PAGE
+            next_page_url = f"{bot.current_url.split('?')[0]}?component=%24TablePages.linkPage&page=FrontEndAdvancedSearchResult&service=direct&session=T&sp=AFrontEndAdvancedSearchResult%2Ctable&sp={idx+1}"
+            bot.get(next_page_url)
+        log("[INFO] E-PROC SCRAPING COMPLETED")
+    except Exception as e:
+        log(f"[ERROR] Exception during scraping: {e}")
+
+def main():
+    parser = argparse.ArgumentParser(description="E-Procurement Scraper")
+    parser.add_argument('--base_url', required=True, help='Base URL for scraping')
+    parser.add_argument('--tender_type', required=True, help='Tender type (O/L)')
+    parser.add_argument('--days_interval', type=int, required=True, help='How many days back to scrape')
+    parser.add_argument('--start_page', type=int, required=True, help='Starting page number')
+    parser.add_argument('--captcha', type=str, required=False, help='Captcha value to use')
+    args = parser.parse_args()
+
+    tender_type = args.tender_type
+    days_interval = args.days_interval
+    start_page = args.start_page
+    captcha = args.captcha
+    base_url = args.base_url
+
+    print(f"[BIDALERT INFO] WELCOME BID ALERT USER: PAGE LOADED")
+    print(f"[BIDALERT INFO] PLEASE ENTER TENDER TYPE O/L ?? {tender_type}")
+    print(f"[BIDALERT INFO] ENTER HOW MANY DAYS BACK DATA YOU WANT TO SCRAP? {days_interval}")
+    print(f"[BIDALERT INFO] ENTER STARTING PAGE NUMBER*** {start_page}")
+    print(f"[BIDALERT INFO] CAPTCHA ENTERED: {captcha}")
+
+    # Actually run the real scraping logic
+    run_eproc_scraper(
+        base_url=base_url,
+        tender_type=tender_type,
+        days_interval=days_interval,
+        start_page=start_page,
+        captcha=captcha
+    )
+
+if __name__ == "__main__":
+    main()
