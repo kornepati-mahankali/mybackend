@@ -15,6 +15,9 @@ function LiveLogViewer() {
         if (res.ok) {
           const data = await res.json();
           setLogs(data.logs);
+          // Print logs to the browser console for debugging
+          console.log("--- Fetched Logs from Backend ---");
+          data.logs.forEach((line: string) => console.log(line));
         }
       } catch (e) {
         // Optionally handle error

@@ -98,7 +98,7 @@ def open_edge():
         base_url = data.get('url', '')
         if not base_url:
             return jsonify({'error': 'URL is required'}), 400
-
+        
         url = build_advanced_search_url(base_url)
         if not url:
             return jsonify({'error': 'Invalid URL provided'}), 400
@@ -124,7 +124,7 @@ def open_edge():
         print(f"[DEBUG] Edge opened, session_id: {session_id}")
 
         return jsonify({'message': 'Edge opened successfully', 'session_id': session_id, 'url': url}), 200
-
+        
     except Exception as e:
         print(f"[ERROR] Failed to open Edge: {e}")
         return jsonify({'error': f'Failed to open Edge: {str(e)}'}), 500
@@ -256,7 +256,7 @@ def merge_session_files(session_id):
             'total_files': len(excel_files),
             'total_rows': len(merged_df)
         }), 200
-        
+            
     except Exception as e:
         return jsonify({'error': f'Failed to merge files: {str(e)}'}), 500
 
@@ -277,7 +277,7 @@ def list_sessions():
                     })
         
         return jsonify({'sessions': sessions}), 200
-        
+            
     except Exception as e:
         return jsonify({'error': f'Failed to list sessions: {str(e)}'}), 500
 
