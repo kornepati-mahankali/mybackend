@@ -1,10 +1,10 @@
 import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AuthPage } from './components/Auth/AuthPage';
 import { DashboardLayout } from './components/Layout/DashboardLayout';
-import { ThemeProvider } from './contexts/ThemeContext';
-import { AnimationProvider } from './contexts/AnimationContext';
-// AddUser from './components/addUser'
+import { HomePage } from './components/HomePage';
+
 const AppContent: React.FC = () => {
   const { user, isLoading } = useAuth();
 
@@ -16,18 +16,22 @@ const AppContent: React.FC = () => {
     );
   }
 
-  return user ? <DashboardLayout /> : < AuthPage/>;
+  return (
+    <Routes>
+      <Route path="/" element={user ? <Navigate to="/dashboard" /> : <HomePage />} />
+      <Route path="/auth" element={user ? <Navigate to="/dashboard" /> : <AuthPage />} />
+      <Route path="/dashboard" element={user ? <DashboardLayout /> : <Navigate to="/auth" />} />
+    </Routes>
+  );
 };
 
 function App() {
   return (
-    <AnimationProvider>
-      <ThemeProvider>
-        <AuthProvider>
-          <AppContent />
-        </AuthProvider>
-      </ThemeProvider>
-    </AnimationProvider>
+    <AuthProvider>
+      <Router>
+        <AppContent />
+      </Router>
+    </AuthProvider>
   );
 }
 

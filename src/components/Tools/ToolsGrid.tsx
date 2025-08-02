@@ -79,6 +79,7 @@ import { motion } from 'framer-motion';
 import { ToolCard } from './ToolCard';
 import { ToolInterface } from './ToolInterface';
 import { Tool } from '../../types';
+import { tools } from '../../data/tools';
 
 interface ToolsGridProps {
   category: string;
@@ -86,36 +87,41 @@ interface ToolsGridProps {
   setSelectedTool: (tool: Tool) => void;
 }
 
-export const ToolsGrid: React.FC<ToolsGridProps> = ({ category, title, setSelectedTool }) => {
-  // Remove local selectedTool state
-  const [tools, setTools] = useState<Tool[]>([]);
-  const [loading, setLoading] = useState(true);
+export const ToolsGrid: React.FC<ToolsGridProps> = React.memo(({ category, title, setSelectedTool }) => {
+  // Use local tools data instead of API call
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const fetchTools = async () => {
-      try {
-        const res = await fetch('http://localhost:8000/scrapers');
-        const data = await res.json();
-        setTools(data.tools);
-      } catch (err) {
-        setError('Failed to load tools.');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchTools();
+    // Set loading to false immediately since we're using local data
+    setLoading(false);
   }, []);
 
   const categoryMap: Record<string, string> = {
     'gem-tools': 'gem',
     'global-tools': 'global',
     'all-tools': 'all',
-    'eprocurement-tools': 'eprocurement'
+    'eprocurement-tools': 'eprocurement',
+    'ireps-tools': 'ireps'
   };
 
-  const filteredTools = tools.filter(tool => tool.category === categoryMap[category] || category === 'all-tools');
+  const filteredTools = React.useMemo(() => {
+    console.log('🔍 Filtering tools for category:', category);
+    console.log('📋 Available tools:', tools);
+    console.log('🗺️ Category map:', categoryMap);
+    
+    const filtered = (tools || []).filter(tool => {
+      if (category === 'all-tools') {
+        return true; // Show all tools
+      }
+      const matches = tool.category === categoryMap[category];
+      console.log(`🔍 Tool "${tool.name}" (category: ${tool.category}) matches ${categoryMap[category]}: ${matches}`);
+      return matches;
+    });
+    
+    console.log('✅ Filtered tools:', filtered);
+    return filtered;
+  }, [tools, category]);
 
   return (
     <div className="space-y-6">
@@ -123,8 +129,8 @@ export const ToolsGrid: React.FC<ToolsGridProps> = ({ category, title, setSelect
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
       >
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">{title}</h1>
-        <p className="text-gray-500 dark:text-gray-400">
+        <h1 className="text-3xl sm:text-2xl font-bold text-gray-900 dark:text-white mb-2">{title}</h1>
+        <p className="text-gray-500 dark:text-gray-400 text-base sm:text-sm">
           Select a tool to configure and start your scraping operation
         </p>
       </motion.div>
@@ -134,7 +140,7 @@ export const ToolsGrid: React.FC<ToolsGridProps> = ({ category, title, setSelect
       ) : error ? (
         <div className="text-red-500 text-center py-12">{error}</div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-4">
           {filteredTools.map((tool, index) => (
             <motion.div
               key={tool.id || tool.name}
@@ -148,7 +154,7 @@ export const ToolsGrid: React.FC<ToolsGridProps> = ({ category, title, setSelect
           {/* Static E-Procurement Tool card if no tools available */}
           {filteredTools.length === 0 && category === 'eprocurement-tools' && (
             <div
-              className="bg-zinc-900 rounded-xl p-6 border border-gray-700 shadow-md w-full max-w-md mx-auto flex flex-col justify-between cursor-pointer hover:border-blue-500"
+              className="bg-zinc-900 rounded-xl p-6 sm:p-4 border border-gray-700 shadow-md w-full max-w-md mx-auto flex flex-col justify-between cursor-pointer hover:border-blue-500"
               onClick={() => setSelectedTool({
                 name: 'eprocurement',
                 category: 'eprocurement',
@@ -164,16 +170,16 @@ export const ToolsGrid: React.FC<ToolsGridProps> = ({ category, title, setSelect
               })}
             >
               <div className="flex items-center justify-between mb-4">
-                <div className="p-3 bg-blue-600/20 rounded-lg">
-                  <svg className="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M6 6h15l-1.5 9h-13z"/><circle cx="9" cy="20" r="1"/><circle cx="18" cy="20" r="1"/></svg>
+                <div className="p-3 sm:p-2 bg-blue-600/20 rounded-lg">
+                  <svg className="w-6 h-6 sm:w-5 sm:h-5 text-blue-400" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M6 6h15l-1.5 9h-13z"/><circle cx="9" cy="20" r="1"/><circle cx="18" cy="20" r="1"/></svg>
                 </div>
-                <span className="text-xs text-green-400">Inactive</span>
+                <span className="text-xs sm:text-[11px] text-green-400">Inactive</span>
               </div>
-              <h3 className="text-lg font-semibold text-white mb-2">E-Procurement Tool</h3>
-              <p className="text-sm text-gray-400 mb-4">
+              <h3 className="text-lg sm:text-base font-semibold text-white mb-2">E-Procurement Tool</h3>
+              <p className="text-sm sm:text-xs text-gray-400 mb-4">
                 Scrapes data from the E-Procurement website and generates Excel files for each page.
               </p>
-              <button className="px-4 py-2 rounded-md text-white bg-violet-600 hover:bg-violet-700 w-full mt-2 pointer-events-none">
+              <button className="px-4 py-2 sm:px-3 sm:py-1.5 rounded-md text-white bg-violet-600 hover:bg-violet-700 w-full mt-2 pointer-events-none text-sm sm:text-xs">
                 Add Tool / Upload
               </button>
             </div>
@@ -186,10 +192,12 @@ export const ToolsGrid: React.FC<ToolsGridProps> = ({ category, title, setSelect
           animate={{ opacity: 1 }}
           className="text-center py-12"
         >
-          <p className="text-gray-400 text-lg">No tools available in this category yet.</p>
-          <p className="text-gray-500 text-sm mt-2">Check back later for new tools!</p>
+          <p className="text-gray-400 text-lg sm:text-base">No tools available in this category yet.</p>
+          <p className="text-gray-500 text-sm sm:text-xs mt-2">Check back later for new tools!</p>
         </motion.div>
       )}
     </div>
   );
-};
+});
+
+ToolsGrid.displayName = 'ToolsGrid';

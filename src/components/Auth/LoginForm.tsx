@@ -54,7 +54,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onToggleMode }) => {
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
+            <label className="block text-sm font-medium mb-2">
               Email Address
             </label>
             <div className="relative">
@@ -71,7 +71,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onToggleMode }) => {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
+            <label className="block text-sm font-medium mb-2">
               Password
             </label>
             <div className="relative">

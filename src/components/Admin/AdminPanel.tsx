@@ -11,57 +11,137 @@ import {
   Plus
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { supabase } from '../supabaseClient'; // adjust path if needed
+import axios from 'axios';
 import { useAnimation } from '../../contexts/AnimationContext';
+import dayjs from 'dayjs';
+import SystemUsageChart from '../SystemUsageChart';
+import AdminMetricsTest from './AdminMetricsTest';
+import { apiService } from '../../services/api';
 
-const systemData = [
-  { name: '00:00', cpu: 45, memory: 62, storage: 78 },
-  { name: '04:00', cpu: 52, memory: 58, storage: 79 },
-  { name: '08:00', cpu: 68, memory: 71, storage: 80 },
-  { name: '12:00', cpu: 82, memory: 85, storage: 82 },
-  { name: '16:00', cpu: 76, memory: 79, storage: 83 },
-  { name: '20:00', cpu: 61, memory: 65, storage: 84 },
-];
+// Types for admin metrics
+interface SystemLoad {
+  cpu_percent: number;
+  memory_percent: number;
+  disk_percent: number;
+  memory_used: string;
+  memory_total: string;
+  disk_used: string;
+  disk_total: string;
+  uptime_seconds: number;
+  uptime_formatted: string;
+  timestamp: string;
+}
+
+interface DatabaseSize {
+  total_size: string;
+  total_size_bytes: number;
+  today_growth: string;
+  today_growth_bytes: number;
+  growth_percentage: number;
+}
+
+interface JobsInfo {
+  active_jobs: number;
+  queued_jobs: number;
+  completed_jobs: number;
+  total_jobs: number;
+  note?: string;
+  error?: string;
+}
+
+interface AdminMetrics {
+  system_load: SystemLoad;
+  database_size: DatabaseSize;
+  jobs_info: JobsInfo;
+  timestamp: string;
+}
 
 export const AdminPanel: React.FC = () => {
-  const [users, setUsers] = useState<Array<{ id: string; username: string; email: string; isActive: boolean; jobs: number }>>([]);
+  const [users, setUsers] = useState<Array<{ id: string; email: string; created_at: string; last_sign_in_at: string; role: string }>>([]);
+  const [adminMetrics, setAdminMetrics] = useState<AdminMetrics | null>(null);
+  const [metricsError, setMetricsError] = useState('');
   const [fetchError, setFetchError] = useState('');
   const { enabled: animationsEnabled } = useAnimation();
 
+  // Fetch admin metrics
+  const fetchAdminMetrics = async () => {
+    try {
+      // Add timestamp to prevent caching
+      const timestamp = new Date().getTime();
+      const response = await axios.get<AdminMetrics>(`http://localhost:8001/admin-metrics?t=${timestamp}`);
+      setAdminMetrics(response.data);
+      setMetricsError('');
+    } catch (err: any) {
+      console.error('Failed to fetch admin metrics:', err);
+      const errorMessage = err.response?.status 
+        ? `API Error: ${err.response.status} - ${err.response.statusText}`
+        : err.message || 'Failed to fetch system metrics.';
+      setMetricsError(errorMessage);
+    }
+  };
+
+  // Fetch users
+  const fetchUsers = async () => {
+    try {
+      console.log('🔍 Fetching users from API service...');
+      const response = await apiService.getSupabaseUsers();
+      console.log('✅ Users fetched successfully:', response);
+      setUsers(response.users || []);
+      setFetchError('');
+    } catch (err) {
+      console.error('❌ Failed to fetch users:', err);
+      setFetchError('Failed to fetch users from backend.');
+      setUsers([]);
+    }
+  };
+
   useEffect(() => {
-    const fetchUsers = async () => {
+    fetchUsers();
+    
+    // Initial connection test
+    const testConnection = async () => {
       try {
-        const { data, error } = await supabase.from('users').select('id, username, email, isActive, jobs');
-        if (error) throw error;
-        setUsers(data || []);
-        setFetchError('');
+        const response = await axios.get('http://localhost:8001/test');
+        console.log('✅ API connection test successful:', response.data);
+        fetchAdminMetrics(); // If test passes, fetch metrics
       } catch (err) {
-        setFetchError('Failed to fetch users from database.');
-        setUsers([]);
+        console.error('❌ API connection test failed:', err);
+        setMetricsError('API server not reachable');
       }
     };
-    fetchUsers();
+    
+    testConnection();
+    
+    // Set up real-time updates every 3 seconds for faster updates
+    const metricsInterval = setInterval(fetchAdminMetrics, 3000);
+    
+    return () => {
+      clearInterval(metricsInterval);
+    };
   }, []);
 
-  const fakeUsers = [
-    { id: '1', username: 'John Doe', email: 'john@example.com', isActive: true, jobs: 12 },
-    { id: '2', username: 'Jane Smith', email: 'jane@example.com', isActive: true, jobs: 8 },
-    { id: '3', username: 'Mike Johnson', email: 'mike@example.com', isActive: false, jobs: 5 },
-    { id: '4', username: 'Sarah Wilson', email: 'sarah@example.com', isActive: true, jobs: 15 },
-  ];
+  const activeUserCount = users.length; // You can refine this if you have an 'active' field
+  const totalUserCount = users.length;
 
-  return (
-    <div className="space-y-6">
-      <motion.div
+  // Get real-time metrics or use fallback values
+  const systemLoad = adminMetrics?.system_load;
+  const databaseSize = adminMetrics?.database_size;
+  const jobsInfo = adminMetrics?.jobs_info;
+
+
+
+      return (
+      <div className="space-y-6">
+        <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="flex justify-between items-center"
+        className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 sm:gap-0"
       >
         <div>
-          <h1 className="text-3xl font-bold dark:text-white text-black mb-2">Admin Panel</h1>
-          <p className="dark:text-gray-400 text-gray-600">System administration and user management</p>
+          <h1 className="text-3xl sm:text-2xl font-bold dark:text-white text-black mb-2">Admin Panel</h1>
+          <p className="dark:text-gray-400 text-gray-600 text-base sm:text-sm">System administration and user management</p>
         </div>
-        <div className="flex items-center space-x-2 text-green-400">
+        <div className="flex items-center space-x-2 text-green-400 mt-2 sm:mt-0">
           <Shield className="w-5 h-5" />
           <span className="text-sm">Admin Access</span>
         </div>
@@ -72,29 +152,29 @@ export const AdminPanel: React.FC = () => {
         {[
           {
             title: 'Active Users',
-            value: '24',
-            change: '+3 online',
+            value: totalUserCount.toString(),
+            change: `+${activeUserCount} online`,
             icon: Users,
             color: 'blue'
           },
           {
             title: 'System Load',
-            value: '76%',
-            change: 'Normal',
+            value: systemLoad ? `${systemLoad.cpu_percent.toFixed(1)}%` : '76%',
+            change: systemLoad ? (systemLoad.cpu_percent > 80 ? 'High' : systemLoad.cpu_percent > 50 ? 'Normal' : 'Low') : 'Normal',
             icon: Server,
             color: 'green'
           },
           {
             title: 'Database Size',
-            value: '2.4TB',
-            change: '+120GB today',
+            value: databaseSize ? databaseSize.total_size : '0B',
+            change: databaseSize ? `${databaseSize.today_growth} today` : '0B today',
             icon: Database,
             color: 'purple'
           },
           {
             title: 'Active Jobs',
-            value: '12',
-            change: '8 queued',
+            value: jobsInfo ? jobsInfo.active_jobs.toString() : '4',
+            change: jobsInfo ? `${jobsInfo.queued_jobs} queued` : '4 queued',
             icon: Activity,
             color: 'orange'
           }
@@ -129,45 +209,7 @@ export const AdminPanel: React.FC = () => {
           transition={{ delay: 0.4 }}
           className="rounded-xl p-6 border dark:bg-gray-800 dark:border-gray-700 bg-white border-gray-200"
         >
-          <h3 className="text-lg font-semibold dark:text-white text-black mb-4">System Resources</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={systemData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-              <XAxis dataKey="name" stroke="#9CA3AF" />
-              <YAxis stroke="#9CA3AF" />
-              <Tooltip 
-                contentStyle={{ 
-                  backgroundColor: '#1F2937', 
-                  border: '1px solid #374151',
-                  borderRadius: '8px'
-                }} 
-              />
-              <Line 
-                type="monotone" 
-                dataKey="cpu" 
-                stroke={animationsEnabled ? "#3B82F6" : "#F59E42"} // blue if enabled, orange if disabled
-                strokeWidth={2}
-                isAnimationActive={animationsEnabled}
-                name="CPU %"
-              />
-              <Line 
-                type="monotone" 
-                dataKey="memory" 
-                stroke={animationsEnabled ? "#10B981" : "#A78BFA"} // green if enabled, purple if disabled
-                strokeWidth={2}
-                isAnimationActive={animationsEnabled}
-                name="Memory %"
-              />
-              <Line 
-                type="monotone" 
-                dataKey="storage" 
-                stroke={animationsEnabled ? "#F59E0B" : "#6B7280"} // yellow if enabled, gray if disabled
-                strokeWidth={2}
-                isAnimationActive={animationsEnabled}
-                name="Storage %"
-              />
-            </LineChart>
-          </ResponsiveContainer>
+          <SystemUsageChart />
         </motion.div>
 
         {/* User Management */}
@@ -191,29 +233,30 @@ export const AdminPanel: React.FC = () => {
             <div className="mb-4 text-red-500 text-sm">{fetchError}</div>
           )}
           <div className="space-y-3">
-            {(fetchError ? fakeUsers : users).map((user, index) => (
-              <div key={user.id} className="flex items-center justify-between p-3 rounded-lg dark:bg-gray-700/50 bg-gray-100">
-                <div className="flex items-center space-x-3">
-                  <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
-                    <span className="text-sm font-medium text-white">
-                      {user.username.split(' ').map(n => n[0]).join('')}
+            {users.slice(0, 10).map((user, index) => {
+              // Determine if user is active based on last_sign_in_at within 30 days
+              const isActive = user.last_sign_in_at && dayjs().diff(dayjs(user.last_sign_in_at), 'day') <= 30;
+              return (
+                <div key={user.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 rounded-lg dark:bg-gray-700/50 bg-gray-100 gap-2 sm:gap-0">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
+                      <span className="text-sm font-medium text-white">
+                        {user.email ? user.email[0].toUpperCase() : '?'}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium dark:text-white text-black">{user.email}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <span className={`px-2 py-1 rounded-full text-xs ${isActive ? 'bg-green-900/50 text-green-400' : 'bg-blue-900/50 text-blue-400'}`}>
+                      {isActive ? 'active' : 'inactive'}
                     </span>
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium dark:text-white text-black">{user.username}</p>
-                    <p className="text-xs dark:text-gray-400 text-gray-600">{user.email}</p>
+                    <span className="text-xs dark:text-gray-400 text-gray-600">Created: {user.created_at ? user.created_at.split('T')[0] : ''}</span>
                   </div>
                 </div>
-                <div className="flex items-center space-x-2">
-                  <span className={`px-2 py-1 rounded-full text-xs ${
-                    user.isActive ? 'bg-green-900/50 text-green-400' : 'bg-gray-900/50 text-gray-400'
-                  }`}>
-                    {user.isActive ? 'active' : 'inactive'}
-                  </span>
-                  <span className="text-xs dark:text-gray-400 text-gray-600">{user.jobs || 0} jobs</span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </motion.div>
       </div> 

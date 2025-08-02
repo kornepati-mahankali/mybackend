@@ -413,12 +413,45 @@ def get_attachment(bot:webdriver.Chrome, tender_id, is_cap_solved=False):
     except:
         return []
 
-def save_to_excel(data_list, idx, file_name):
+def save_to_excel(data_list, idx, file_name, session_id=None):
               
     headers = (["Bid User", "Tender ID", "Name of Work", "Tender Category", "Department", "Quantity", "EMD", "Exemption", 
                 "ECV", "State Name", "Location", "Apply Mode", "Website", "Document Link", "Closing Date", "Pincode", "Attachments"])
 
-    file_path = path.join(OUTPUT_DIR , file_name.format(idx))
+    # Debug logging - use print for backend console and log callback if available
+    debug_msg = f"[DEBUG] save_to_excel called with session_id: {session_id}"
+    print(debug_msg)
+    
+    debug_msg = f"[DEBUG] BASE_DIR: {BASE_DIR}"
+    print(debug_msg)
+    
+    debug_msg = f"[DEBUG] path.dirname(BASE_DIR): {path.dirname(BASE_DIR)}"
+    print(debug_msg)
+
+    # Use session-based directory if session_id is provided
+    if session_id:
+        # Use the outputs/eproc directory structure
+        session_dir = path.join(path.dirname(BASE_DIR), "outputs", "eproc", session_id)
+        debug_msg = f"[DEBUG] Session directory: {session_dir}"
+        print(debug_msg)
+        
+        if not path.exists(session_dir):
+            debug_msg = f"[DEBUG] Creating session directory: {session_dir}"
+            print(debug_msg)
+            makedirs(session_dir)
+            
+        # Handle both old format (page-based) and new format (tender-based)
+        if "{idx}" in file_name:
+            file_path = path.join(session_dir, file_name.format(idx))
+        else:
+            file_path = path.join(session_dir, file_name)
+        debug_msg = f"[DEBUG] File will be saved to: {file_path}"
+        print(debug_msg)
+    else:
+        file_path = path.join(OUTPUT_DIR, file_name.format(idx))
+        debug_msg = f"[DEBUG] No session_id, saving to default: {file_path}"
+        print(debug_msg)
+    
     writer = pd.ExcelWriter(file_path, engine='xlsxwriter',date_format = "dd-mm-yyyy",datetime_format = "dd-mm-yyyy hh:mm:ss")
     writer.book.strings_to_urls = False
     df = pd.DataFrame(data_list, columns=headers)
@@ -436,10 +469,23 @@ def save_to_excel(data_list, idx, file_name):
     worksheet.set_column(date_col_idx, date_col_idx, 22, date_format)
 
     writer.close()
+    
+    # Debug: Confirm file was created
+    if path.exists(file_path):
+        debug_msg = f"[DEBUG] ✅ File successfully created: {file_path}"
+        print(debug_msg)
+        # Emit special message for file_written event
+        if session_id:
+            filename = os.path.basename(file_path)
+            file_written_msg = f"[FILE_WRITTEN] {filename} {session_id}"
+            print(file_written_msg)
+    else:
+        debug_msg = f"[DEBUG] ❌ File was NOT created: {file_path}"
+        print(debug_msg)
 
     return file_path
 
-def get_all_detail(bot: webdriver.Chrome, tender_links, base_url, log=None):
+def get_all_detail(bot: webdriver.Chrome, tender_links, base_url, log=None, session_id=None, page_num=1, file_name=None):
     all_detail = []
     for idx, link in enumerate(tender_links):
         msg = f"[BIDALERT INFO] GETTING TENDER [{idx+1}/{len(tender_links)}]"
@@ -456,11 +502,36 @@ def get_all_detail(bot: webdriver.Chrome, tender_links, base_url, log=None):
             title, word_desc, tander_value_in, location, pincode, _, _ = get_work_details(bot)
             published_date, bid_sub_end_date = get_critical_dates(bot)
             attachment_links = ""
-            all_detail.append([
+            tender_data = [
                 '', tender_id, word_desc, tender_category, organisation_chain, '',
                 emd_amout, emd_exepm_allowed, tander_value_in, '', location, 'Online',
                 base_url, '', bid_sub_end_date, pincode, attachment_links
-            ])
+            ]
+            all_detail.append(tender_data)
+            
+            # Save individual tender file immediately if session_id is provided
+            if session_id and file_name:
+                try:
+                    tender_count = idx + 1
+                    log_msg = f"[INFO] SAVING TENDER [{tender_count}/{len(tender_links)}] TO EXCEL FILE"
+                    if log:
+                        log(log_msg)
+                    print(log_msg)
+                    
+                    # Create individual tender file name
+                    tender_file_name = file_name.replace("_page-{}.xlsx", f"_page-{page_num}_tender-{tender_count}.xlsx")
+                    excel_path = save_to_excel([tender_data], tender_count, tender_file_name, session_id)
+                    
+                    success_msg = f"[INFO] TENDER [{tender_count}/{len(tender_links)}] SAVED TO EXCEL FILE {excel_path}"
+                    if log:
+                        log(success_msg)
+                    print(success_msg)
+                except Exception as e:
+                    error_msg = f"[ERROR] Failed to save tender {tender_count} file: {e}"
+                    if log:
+                        log(error_msg)
+                    print(error_msg)
+                    
         except Exception as e:
             err_msg = f"[ERROR] Skipping tender due to error: {e}"
             if log:
@@ -511,7 +582,14 @@ def start():
     print(f"[BIDALERT INFO] FOUND {total_pages} PAGES TO SCRAPE")
 
     start_page = int((input("[BIDALERT INFO] ENTER  *** STARTING PAGE NUMBER *** ")))
-    bot.maximize_window()
+    
+    # Try to maximize window safely, but don't fail if it doesn't work
+    try:
+        bot.maximize_window()
+        print("[DEBUG] Window maximized successfully")
+    except Exception as e:
+        print(f"[WARNING] Could not maximize window: {e}")
+        # Continue without maximizing
 
     for idx in range(start_page,int(total_pages)+1):
         # ALL THE TANDERS APPEARS ON THIS TABLE    
@@ -558,119 +636,157 @@ def run_eproc_scraper(
     captcha=None
 ):
     print(f"[DEBUG] Starting run_eproc_scraper with base_url={base_url}, tender_type={tender_type}, days_interval={days_interval}, start_page={start_page}, captcha={captcha}")
+    bot = None  # Initialize bot to None
     try:
         options = Options()
-        # options.add_argument('--headless')  # Temporarily disable headless mode for debugging
+        # options.add_argument('--headless')
         options.add_argument('--disable-gpu')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_argument('--disable-extensions')
+        options.add_argument('--disable-plugins')
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
         prefs = {"download_restrictions": 3}
         options.add_experimental_option("prefs", prefs)
-        PATH = BASE_DIR + "\\edgedriver_win64\\msedgedriver.exe"
-        chromedriver_path = PATH
-        servicee = Service(executable_path=chromedriver_path)
-        bot = webdriver.Edge(service=servicee, options=options)
-        bot.minimize_window()
-        # Construct the URL for advanced search
+        
+        # Use a more robust way to define the driver path
+        driver_path = path.join(BASE_DIR, "edgedriver_win64", "msedgedriver.exe")
+        service = Service(executable_path=driver_path)
+        bot = webdriver.Edge(service=service, options=options)
+        
+        # Try to minimize window safely, but don't fail if it doesn't work
+        try:
+            bot.minimize_window()
+            print("[DEBUG] Window minimized successfully")
+        except Exception as e:
+            print(f"[WARNING] Could not minimize window: {e}")
+            # Continue without minimizing
+        
         URL = f"{base_url}?page=FrontEndAdvancedSearch&service=page"
         print(f"[DEBUG] Navigating to URL: {URL}")
         bot.get(URL)
+        
         try:
             close_button = bot.find_element(By.CLASS_NAME, "alertbutclose")
             close_button.click()
             print("[DEBUG] Popup closed.")
         except NoSuchElementException:
             print("[DEBUG] Popup not present.")
+            
         print("[BIDALERT INFO] WELCOME ** BID ALERT *** USER :: PAGE LOADED ")    
         sleep(2)
+        
         print("[DEBUG] Setting tender type and date interval...")
-        # Set tender type and days interval using arguments
-        # select_options logic, but use arguments instead of input()
         WebDriverWait(bot, TIMEOUT).until(EC.element_to_be_clickable((By.ID, "captchaImage")))
         bot.find_element(By.ID, "dateCriteria").click()
         bot.find_element(By.ID, "dateCriteria").send_keys("Published Date")
         bot.find_element(By.ID, "dateCriteria").click()    
+        
         global FILE_NAME
-        if (tender_type.lower() == 'o'):
+        if tender_type.lower() == 'o':
             bot.find_element(By.ID, "TenderType").click()
             bot.find_element(By.ID, "TenderType").send_keys("Open Tender")
             bot.find_element(By.ID, "TenderType").click()
             FILE_NAME = "open-tenders_output_page-{}.xlsx"
-        elif (tender_type.lower() == 'l'):
+        elif tender_type.lower() == 'l':
             bot.find_element(By.ID, "TenderType").click()
             bot.find_element(By.ID, "TenderType").send_keys("Limited Tender")
             bot.find_element(By.ID, "TenderType").click()
             FILE_NAME = "limited-tenders_output_page-{}.xlsx"
+            
         bot.execute_script('document.getElementById("fromDate").removeAttribute("readonly")')
         bot.execute_script('document.getElementById("toDate").removeAttribute("readonly")')
+        
         days_interval = int(days_interval)
-        if (days_interval == 1):
-            yesterday = today - timedelta(days = 1)
+        if days_interval == 1:
+            yesterday = today - timedelta(days=1)
             new_yesterday_date = yesterday.strftime("%d/%m/%Y")
             bot.find_element(By.ID, "fromDate").clear()
             bot.find_element(By.ID, "fromDate").send_keys(new_yesterday_date)    
             bot.find_element(By.ID, "toDate").clear()
             bot.find_element(By.ID, "toDate").send_keys(new_yesterday_date)
-        elif (days_interval > 1):        
-            yesterday = today - timedelta(days = days_interval)
+        elif days_interval > 1:        
+            yesterday = today - timedelta(days=days_interval)
             new_yesterday_date = yesterday.strftime("%d/%m/%Y")
-            yesterday2 = today - timedelta(days = 1)
+            yesterday2 = today - timedelta(days=1)
             new_yesterday2_date = yesterday2.strftime("%d/%m/%Y")
             bot.find_element(By.ID, "fromDate").clear()
             bot.find_element(By.ID, "fromDate").send_keys(new_yesterday_date)    
             bot.find_element(By.ID, "toDate").clear()
             bot.find_element(By.ID, "toDate").send_keys(new_yesterday2_date)
+            
         print("[DEBUG] Solving captcha...")
-        # Solve captcha manually or with provided value
         while True:
             did_handle_cap = solve_captcha_main(bot, captcha)
             if did_handle_cap or captcha is not None:
                 break
+                
         print("[DEBUG] Captcha solved, getting total pages count...")
-        # GETTING TOTAL PAGES COUNT
         try:
             list_footer = bot.find_element(By.CLASS_NAME, "list_footer")
-            total_pages = list_footer.find_element(By.ID, "linkLast").get_attribute("href").split("=")[-1].strip()
-            total_pages = int(total_pages)
+            total_pages_link = list_footer.find_element(By.ID, "linkLast")
+            total_pages = int(total_pages_link.get_attribute("href").split("=")[-1].strip())
         except Exception as e:
             print(f"[ERROR] Could not get total pages: {e}")
             total_pages = 1
+            
         print(f"[BIDALERT INFO] FOUND {total_pages} PAGES TO SCRAPE")
         start_page = int(start_page)
-        bot.maximize_window()
+        
+        # Try to maximize window safely, but don't fail if it doesn't work
+        try:
+            bot.maximize_window()
+            print("[DEBUG] Window maximized successfully")
+        except Exception as e:
+            print(f"[WARNING] Could not maximize window: {e}")
+            # Continue without maximizing
+        
         for idx in range(start_page, total_pages + 1):
-            all_detail = []
             print(f"[BIDALERT INFO] SCRAPING PAGE [{idx}/{total_pages}]")
             try:
                 list_table = bot.find_element(By.ID, "table")
                 a_tags = list_table.find_elements(By.TAG_NAME, "a")
-                tender_links = []
-                for a_tag in a_tags:
-                    link = a_tag.get_attribute("href")
-                    if "DirectLink" in link:
-                        tender_links.append(link)
+                tender_links = [a.get_attribute("href") for a in a_tags if "DirectLink" in a.get_attribute("href")]
                 print(f"[DEBUG] Found {len(tender_links)} tender links on page {idx}")
+                
+                # Process each tender individually and save file for each
+                tender_count = 0
                 for d in get_all_detail(bot, tender_links, base_url):
-                    all_detail.append(d)
+                    tender_count += 1
+                    # Save individual tender to Excel file
+                    print(f"[BIDALERT INFO] SAVING TENDER [{tender_count}/{len(tender_links)}] TO EXCEL FILE")
+                    
+                    # Create individual tender file name
+                    tender_file_name = FILE_NAME.replace("_page-{}.xlsx", f"_page-{idx}_tender-{tender_count}.xlsx")
+                    try:
+                        excel_path = save_to_excel([d], tender_count, tender_file_name)
+                        print(f"[BIDALERT INFO] TENDER [{tender_count}/{len(tender_links)}] SAVED TO EXCEL FILE {excel_path}")
+                    except Exception as e:
+                        print(f"[ERROR] Exception during saving Excel file for tender {tender_count}: {e}")
+                        
             except Exception as e:
                 print(f"[ERROR] Exception during page scraping [{idx}]: {e}")
-            print(f"[BIDALERT INFO] SAVING LAST {len(all_detail)} TENDER DETAILS TO EXCEL FILE")
-            try:
-                excel_path = save_to_excel(all_detail, idx)
-                print(f"[BIDALERT INFO] LAST {len(all_detail)} TENDER DETAILS ARE SAVED TO EXCEL FILE {excel_path}")
-            except Exception as e:
-                print(f"[ERROR] Exception during saving Excel file for page {idx}: {e}")
+                
             print("-" * 60)
-            # GOING TO NEXT PAGE
-            try:
-                next_page_url = f"{bot.current_url.split('?')[0]}?component=%24TablePages.linkPage&page=FrontEndAdvancedSearchResult&service=direct&session=T&sp=AFrontEndAdvancedSearchResult%2Ctable&sp={idx+1}"
-                print(f"[DEBUG] Navigating to next page: {next_page_url}")
-                bot.get(next_page_url)
-            except Exception as e:
-                print(f"[ERROR] Exception during navigation to next page: {e}")
+            
+            if idx < total_pages:
+                try:
+                    next_page_url = f"{base_url}?component=%24TablePages.linkPage&page=FrontEndAdvancedSearchResult&service=direct&session=T&sp=AFrontEndAdvancedSearchResult%2Ctable&sp={idx+1}"
+                    print(f"[DEBUG] Navigating to next page: {next_page_url}")
+                    bot.get(next_page_url)
+                except Exception as e:
+                    print(f"[ERROR] Exception during navigation to next page: {e}")
+                    
         print("[INFO] E-PROC SCRAPING COMPLETED")
+        
     except Exception as e:
         print(f"[ERROR] Exception during scraping: {e}")
-    print("[BIDALERT INFO] Edge browser closed after scraping.")
-    bot.quit()
+    finally:
+        if bot:
+            print("[BIDALERT INFO] Edge browser closed after scraping.")
+            bot.quit()
 
 def run_eproc_scraper_with_bot(
     bot,
@@ -679,8 +795,17 @@ def run_eproc_scraper_with_bot(
     start_page,
     captcha=None,
     log_callback=None,
-    base_url=None
+    base_url=None,
+    session_id=None
 ):
+    print(f"[DEBUG] run_eproc_scraper_with_bot called with session_id: {session_id}")
+    print(f"[DEBUG] Bot object: {bot}")
+    print(f"[DEBUG] Tender type: {tender_type}")
+    print(f"[DEBUG] Days interval: {days_interval}")
+    print(f"[DEBUG] Start page: {start_page}")
+    print(f"[DEBUG] Captcha: {captcha}")
+    print(f"[DEBUG] Base URL: {base_url}")
+    
     def log(msg):
         if log_callback:
             log_callback(msg)
@@ -695,12 +820,12 @@ def run_eproc_scraper_with_bot(
         bot.find_element(By.ID, "dateCriteria").click()
         
         file_name = ""
-        if (tender_type.lower() == 'o'):
+        if tender_type.lower() == 'o':
             bot.find_element(By.ID, "TenderType").click()
             bot.find_element(By.ID, "TenderType").send_keys("Open Tender")
             bot.find_element(By.ID, "TenderType").click()
             file_name = "open-tenders_output_page-{}.xlsx"
-        elif (tender_type.lower() == 'l'):
+        elif tender_type.lower() == 'l':
             bot.find_element(By.ID, "TenderType").click()
             bot.find_element(By.ID, "TenderType").send_keys("Limited Tender")
             bot.find_element(By.ID, "TenderType").click()
@@ -708,57 +833,63 @@ def run_eproc_scraper_with_bot(
 
         bot.execute_script('document.getElementById("fromDate").removeAttribute("readonly")')
         bot.execute_script('document.getElementById("toDate").removeAttribute("readonly")')
+        
         days_interval = int(days_interval)
-        if (days_interval == 1):
-            yesterday = today - timedelta(days = 1)
+        if days_interval == 1:
+            yesterday = today - timedelta(days=1)
             new_yesterday_date = yesterday.strftime("%d/%m/%Y")
             bot.find_element(By.ID, "fromDate").clear()
             bot.find_element(By.ID, "fromDate").send_keys(new_yesterday_date)    
             bot.find_element(By.ID, "toDate").clear()
             bot.find_element(By.ID, "toDate").send_keys(new_yesterday_date)
-        elif (days_interval > 1):        
-            yesterday = today - timedelta(days = days_interval)
+        elif days_interval > 1:        
+            yesterday = today - timedelta(days=days_interval)
             new_yesterday_date = yesterday.strftime("%d/%m/%Y")
-            yesterday2 = today - timedelta(days = 1)
+            yesterday2 = today - timedelta(days=1)
             new_yesterday2_date = yesterday2.strftime("%d/%m/%Y")
             bot.find_element(By.ID, "fromDate").clear()
             bot.find_element(By.ID, "fromDate").send_keys(new_yesterday_date)    
             bot.find_element(By.ID, "toDate").clear()
             bot.find_element(By.ID, "toDate").send_keys(new_yesterday2_date)
-        # Solve captcha manually or with provided value
+            
         while True:
             did_handle_cap = solve_captcha_main(bot, captcha)
             if did_handle_cap or captcha is not None:
                 break
-        # GETTING TOTAL PAGES COUNT
+                
         try:
             list_footer = bot.find_element(By.CLASS_NAME, "list_footer")
-            total_pages = list_footer.find_element(By.ID, "linkLast").get_attribute("href").split("=")[-1].strip()
-            total_pages = int(total_pages)
+            total_pages_link = list_footer.find_element(By.ID, "linkLast")
+            total_pages = int(total_pages_link.get_attribute("href").split("=")[-1].strip())
         except:
             total_pages = 1
+            
         log(f"[INFO] FOUND {total_pages} PAGES TO SCRAPE")
         start_page = int(start_page)
-        bot.maximize_window()
+        
+        # Try to maximize window safely, but don't fail if it doesn't work
+        try:
+            bot.maximize_window()
+            log("[DEBUG] Window maximized successfully")
+        except Exception as e:
+            log(f"[WARNING] Could not maximize window: {e}")
+            # Continue without maximizing
+        
         for idx in range(start_page, total_pages + 1):
-            all_detail = []
             log(f"[INFO] SCRAPING PAGE [{idx}/{total_pages}]")
             list_table = bot.find_element(By.ID, "table")
             a_tags = list_table.find_elements(By.TAG_NAME, "a")
-            tender_links = []
-            for a_tag in a_tags:
-                link = a_tag.get_attribute("href")
-                if "DirectLink" in link:
-                    tender_links.append(link)
-            for d in get_all_detail(bot, tender_links, base_url, log):
-                all_detail.append(d)
-            log(f"[INFO] SAVING LAST {len(all_detail)} TENDER DETAILS TO EXCEL FILE")
-            excel_path = save_to_excel(all_detail, idx, file_name)
-            log(f"[INFO] LAST {len(all_detail)} TENDER DETAILS ARE SAVED TO EXCEL FILE {excel_path}")
+            tender_links = [a.get_attribute("href") for a in a_tags if "DirectLink" in a.get_attribute("href")]
+            
+            # Process each tender individually - files will be saved automatically in get_all_detail
+            all_detail = get_all_detail(bot, tender_links, base_url, log, session_id, idx, file_name)
+            log(f"[INFO] COMPLETED PAGE [{idx}/{total_pages}] - {len(all_detail)} TENDERS PROCESSED")
             log("-" * 60)
-            # GOING TO NEXT PAGE
-            next_page_url = f"{bot.current_url.split('?')[0]}?component=%24TablePages.linkPage&page=FrontEndAdvancedSearchResult&service=direct&session=T&sp=AFrontEndAdvancedSearchResult%2Ctable&sp={idx+1}"
-            bot.get(next_page_url)
+            
+            if idx < total_pages:
+                next_page_url = f"{base_url}?component=%24TablePages.linkPage&page=FrontEndAdvancedSearchResult&service=direct&session=T&sp=AFrontEndAdvancedSearchResult%2Ctable&sp={idx+1}"
+                bot.get(next_page_url)
+                
         log("[INFO] E-PROC SCRAPING COMPLETED")
     except Exception as e:
         log(f"[ERROR] Exception during scraping: {e}")

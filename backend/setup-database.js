@@ -40,9 +40,9 @@ async function setupDatabase() {
       );
     `);
 
-    // Create scraping_jobs table
+    // Create tools_1 table (for job tracking)
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS scraping_jobs (
+      CREATE TABLE IF NOT EXISTS tools_1 (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         user_id UUID REFERENCES users(id),
         tool_id UUID REFERENCES tools(id),
@@ -57,6 +57,47 @@ async function setupDatabase() {
         logs JSONB,
         created_at TIMESTAMP DEFAULT NOW()
       );
+    `);
+
+    // Create eprocurement_tenders table (for storing merged e-procurement data)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS eprocurement_tenders (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        bid_user VARCHAR(100),
+        tender_id VARCHAR(100),
+        name_of_work TEXT,
+        tender_category VARCHAR(50),
+        department VARCHAR(100),
+        quantity VARCHAR(50),
+        emd DECIMAL(15, 2),
+        exemption VARCHAR(50),
+        ecv DECIMAL(20, 2),
+        state_name VARCHAR(100),
+        location VARCHAR(100),
+        apply_mode VARCHAR(50),
+        website VARCHAR(100),
+        document_link TEXT,
+        closing_date DATE,
+        pincode VARCHAR(10),
+        attachments TEXT,
+        source_session_id VARCHAR(100),
+        source_file VARCHAR(255),
+        merge_session_id VARCHAR(100),
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
+    // Create index on tender_id for faster lookups
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_eprocurement_tenders_tender_id 
+      ON eprocurement_tenders(tender_id);
+    `);
+
+    // Create index on merge_session_id for filtering by merge session
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_eprocurement_tenders_merge_session 
+      ON eprocurement_tenders(merge_session_id);
     `);
 
     // Insert default super admin user

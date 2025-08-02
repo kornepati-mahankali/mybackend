@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Query, Body, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, Body, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
@@ -12,6 +12,13 @@ from selenium.common.exceptions import NoSuchElementException
 from uuid import uuid4
 from threading import Lock
 from .search import run_eproc_scraper
+from . import ireps
+from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.webdriver.chrome.service import Service as ChromeService
+import shutil
+from datetime import datetime
+import asyncio
+import json
 
 app = FastAPI()
 
@@ -37,18 +44,50 @@ class ConnectionManager:
         self.active_connections.remove(websocket)
 
     async def send_log(self, message: str):
+        import json
+        log_data = {"message": message, "timestamp": str(datetime.now())}
+        print(f"[DEBUG] Sending log to {len(self.active_connections)} connections: {message}")
         for connection in self.active_connections:
-            await connection.send_text(message)
+            try:
+                await connection.send_text(json.dumps(log_data))
+                print(f"[DEBUG] Log sent successfully to connection")
+            except Exception as e:
+                print(f"[ERROR] Failed to send log to connection: {e}")
+                # Remove broken connection
+                try:
+                    self.active_connections.remove(connection)
+                except ValueError:
+                    pass
 
 log_manager = ConnectionManager()
 
 @app.websocket("/ws/logs")
 async def websocket_logs(websocket: WebSocket):
     await log_manager.connect(websocket)
+    print(f"[DEBUG] WebSocket connected. Total connections: {len(log_manager.active_connections)}")
     try:
         while True:
-            await websocket.receive_text()  # Keep the connection open
+            # Wait for messages from client
+            data = await websocket.receive_text()
+            try:
+                message_data = json.loads(data)
+                if message_data.get('type') == 'test':
+                    print(f"[DEBUG] Received test message from frontend: {message_data.get('message')}")
+                    # Send a test response
+                    test_response = {"message": "[TEST] Backend received your test message!", "timestamp": str(datetime.now())}
+                    await websocket.send_text(json.dumps(test_response))
+            except json.JSONDecodeError:
+                print(f"[DEBUG] Received non-JSON message: {data}")
+            
+            # Send a ping message to keep connection alive
+            ping_data = {"message": "[PING] Connection alive", "timestamp": str(datetime.now())}
+            await websocket.send_text(json.dumps(ping_data))
+            await asyncio.sleep(30)  # Send ping every 30 seconds
     except WebSocketDisconnect:
+        log_manager.disconnect(websocket)
+        print(f"[DEBUG] WebSocket disconnected. Remaining connections: {len(log_manager.active_connections)}")
+    except Exception as e:
+        print(f"[ERROR] WebSocket error: {e}")
         log_manager.disconnect(websocket)
 
 # Example usage: await log_manager.send_log("Scraping started...")
@@ -164,4 +203,431 @@ def scrape(
     )
     if excel_path and os.path.exists(excel_path):
         return FileResponse(excel_path, filename=os.path.basename(excel_path))
-    return {"error": "Excel file not generated."} 
+    return {"error": "Excel file not generated."}
+
+@app.post("/ireps/open-edge")
+def ireps_open_edge(name: str = Body(...), starting_page: int = Body(...)):
+    # Always open Chrome for IREPS
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    CHROME_PATH = os.path.join(BASE_DIR, "edgedriver_win64", "chromedriver.exe")
+    browser = None
+    try:
+        print(f"[DEBUG] Checking for ChromeDriver at: {CHROME_PATH}")
+        if not os.path.exists(CHROME_PATH):
+            print(f"[ERROR] ChromeDriver not found at {CHROME_PATH}")
+            return JSONResponse(
+                status_code=500, 
+                content={
+                    "error": f"Chrome WebDriver not found at {CHROME_PATH}",
+                    "path": CHROME_PATH,
+                    "base_dir": BASE_DIR,
+                    "files_in_dir": os.listdir(BASE_DIR) if os.path.exists(BASE_DIR) else "Directory not found"
+                }
+            )
+        
+        print("[DEBUG] ChromeDriver found, creating Chrome options...")
+        options = ChromeOptions()
+        # Add some common options to avoid issues
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--disable-extensions")
+        options.add_argument("--disable-plugins")
+        options.add_argument("--disable-images")
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
+        
+        print("[DEBUG] Creating Chrome service...")
+        servicec = ChromeService(executable_path=CHROME_PATH)
+        
+        print("[DEBUG] Launching Chrome browser...")
+        bot = webdriver.Chrome(service=servicec, options=options)
+        
+        print("[DEBUG] Chrome browser launched, navigating to IREPS...")
+        bot.get("https://www.ireps.gov.in/epsn/guestLogin.do")
+        
+        print("[DEBUG] Successfully navigated to IREPS website")
+        browser = "chrome"
+        
+        session_id = str(uuid4())
+        with sessions_lock:
+            sessions[session_id] = {"bot": bot, "name": name, "starting_page": starting_page}
+        
+        print(f"[DEBUG] Session created with ID: {session_id}")
+        return {"session_id": session_id, "browser": browser}
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to open Chrome: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": f"Failed to open Chrome: {str(e)}"})
+
+@app.post("/ireps/start-scraping")
+async def ireps_start_scraping(request: Request):
+    try:
+        data = await request.json()
+        session_id = data.get('session_id')
+        name = data.get('name')
+        starting_page = data.get('starting_page')
+        
+        print(f"[DEBUG] Starting IREPS scraping for session: {session_id}")
+        print(f"[DEBUG] Parameters: name={name}, starting_page={starting_page}")
+        
+        with sessions_lock:
+            session = sessions.get(session_id)
+        
+        if not session:
+            print(f"[ERROR] Session {session_id} not found")
+            return JSONResponse(status_code=404, content={"error": "Session not found"})
+        
+        bot = session["bot"]
+        # Use name and starting_page from request, fallback to session if not provided
+        name = name or session.get("name")
+        starting_page = starting_page or session.get("starting_page")
+        
+        # Add stop flag to session
+        session["stop_flag"] = False
+        session["scraping_thread"] = None
+        
+        print(f"[DEBUG] Using parameters: name={name}, starting_page={starting_page}")
+        print(f"[DEBUG] Bot object: {type(bot)}")
+        
+        import asyncio
+        def log_callback(msg):
+            try:
+                print(f"[IREPS LOG] {msg}")
+                # Use asyncio.run for thread safety - this is the recommended approach
+                asyncio.run(log_manager.send_log(msg))
+            except Exception as e:
+                print(f"[ERROR] Failed to send log via WebSocket: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        def run_scraper():
+            try:
+                print(f"[DEBUG] Starting scraper thread for session {session_id}")
+                log_callback("[IREPS] Scraping started...")
+                log_callback(f"[IREPS] Starting page: {starting_page}")
+                log_callback(f"[IREPS] Name: {name}")
+                
+                # Pass the session to check for stop flag
+                output_files = ireps.scrape_with_selenium(bot, name, starting_page, log_callback, session_id, session)
+                
+                if output_files:
+                    log_callback(f"[IREPS] Scraping finished! Output files: {', '.join([os.path.basename(f) for f in output_files])}")
+                else:
+                    log_callback("[IREPS] No output files generated.")
+                print(f"[DEBUG] Scraper thread completed for session {session_id}")
+            except Exception as e:
+                print(f"[ERROR] Scraper thread failed: {e}")
+                import traceback
+                traceback.print_exc()
+                log_callback(f"[ERROR] Scraping failed: {str(e)}")
+        
+        import threading
+        thread = threading.Thread(target=run_scraper)
+        thread.daemon = True
+        thread.start()
+        
+        # Store thread reference in session
+        with sessions_lock:
+            session["scraping_thread"] = thread
+        
+        print(f"[DEBUG] Scraper thread started for session {session_id}")
+        
+        # Send a test log message immediately
+        try:
+            asyncio.run(log_manager.send_log("[IREPS] Test log message - scraping thread started"))
+            print("[DEBUG] Test log message sent successfully")
+        except Exception as e:
+            print(f"[ERROR] Failed to send test log: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        return {"status": "Scraping started", "session_id": session_id}
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to start IREPS scraping: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": f"Failed to start scraping: {str(e)}"})
+
+@app.post("/ireps/delete-file")
+def delete_file(session_id: str = Body(...), filename: str = Body(...)):
+    BASEDIR = os.path.dirname(os.path.abspath(__file__))
+    OUTPUTDIR = os.path.join(BASEDIR, "ireps", session_id)
+    file_path = os.path.join(OUTPUTDIR, filename)
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        return {"status": "deleted"}
+    return JSONResponse(status_code=404, content={"error": "File not found"})
+
+@app.post("/ireps/merge-files")
+def merge_files(session_id: str = Body(...)):
+    try:
+        print(f"[DEBUG] Starting merge process for session: {session_id}")
+        
+        BASEDIR = os.path.dirname(os.path.abspath(__file__))
+        OUTPUTDIR = os.path.join(BASEDIR, "ireps", session_id)
+        
+        if not os.path.exists(OUTPUTDIR):
+            print(f"[ERROR] Output directory not found: {OUTPUTDIR}")
+            return JSONResponse(status_code=404, content={"error": "Output directory not found"})
+        
+        import pandas as pd
+        import fnmatch
+        file_prefix = "tenders_page"
+        filenames = [os.path.join(OUTPUTDIR, filename)
+                     for filename in os.listdir(OUTPUTDIR)
+                     if fnmatch.fnmatch(filename, f"{file_prefix}*.xlsx")]
+        print(f"[DEBUG] Files to merge: {filenames}")
+        
+        if not filenames:
+            print("[ERROR] No files found to merge")
+            return JSONResponse(status_code=400, content={"error": "No Excel files found to merge"})
+        
+        if len(filenames) == 1:
+            print(f"[DEBUG] Only one file found, returning it as merged file: {filenames[0]}")
+            from fastapi.responses import FileResponse
+            return FileResponse(
+                filenames[0], 
+                filename=f"merged_data_{session_id}.csv",
+                media_type='text/csv'
+            )
+        
+        dataframes = []
+        for file_path in filenames:
+            try:
+                print(f"[DEBUG] Reading file: {os.path.basename(file_path)}")
+                df = pd.read_excel(file_path, engine='openpyxl')
+                print(f"[DEBUG] DataFrame shape: {df.shape}")
+                dataframes.append(df)
+            except Exception as e:
+                print(f"[ERROR] Error reading {file_path}: {e}")
+                continue
+        
+        if not dataframes:
+            print("[ERROR] No valid dataframes to merge after filtering unreadable files.")
+            return JSONResponse(status_code=400, content={"error": "No valid Excel files could be read. Check file format and content."})
+        
+        print(f"[DEBUG] Merging {len(dataframes)} dataframes")
+        merged_df = pd.concat(dataframes, ignore_index=True)
+        print(f"[DEBUG] Merged DataFrame shape: {merged_df.shape}")
+        
+        output_csv_file = os.path.join(OUTPUTDIR, f"merged_data_{session_id}.csv")
+        merged_df.to_csv(output_csv_file, index=False)
+        print(f"[DEBUG] Merged CSV file saved to: {output_csv_file}")
+        
+        from fastapi.responses import FileResponse
+        return FileResponse(
+            output_csv_file, 
+            filename=f"merged_data_{session_id}.csv",
+            media_type='text/csv'
+        )
+        
+    except Exception as e:
+        print(f"[ERROR] Merge process failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": f"Merge process failed: {str(e)}"})
+
+@app.post("/ireps/kmerge-files")
+def kmerge_files(session_id: str = Body(...)):
+    import pandas as pd
+    import fnmatch
+    BASEDIR = os.path.dirname(os.path.abspath(__file__))
+    OUTPUTDIR = os.path.join(BASEDIR, "ireps", session_id)
+    file_prefix = "tenders_page"
+    filenames = [os.path.join(OUTPUTDIR, filename)
+                 for filename in os.listdir(OUTPUTDIR)
+                 if fnmatch.fnmatch(filename, f"{file_prefix}*.xlsx")]
+    dataframes = []
+    for file_path in filenames:
+        try:
+            df = pd.read_excel(file_path, engine='openpyxl')
+            # Filter for Karnataka rows (case-insensitive, any column containing 'karnataka')
+            mask = df.apply(lambda row: row.astype(str).str.contains('karnataka', case=False, na=False).any(), axis=1)
+            karnataka_df = df[mask]
+            if not karnataka_df.empty:
+                dataframes.append(karnataka_df)
+        except Exception as e:
+            print(f"Error reading {file_path}: {e}")
+    if dataframes:
+        merged_df = pd.concat(dataframes, ignore_index=True)
+        output_csv_file = os.path.join(OUTPUTDIR, f"karnataka_merged_{session_id}.csv")
+        merged_df.to_csv(output_csv_file, index=False)
+        from fastapi.responses import FileResponse
+        return FileResponse(output_csv_file, filename=f"karnataka_merged_{session_id}.csv", media_type='text/csv')
+    else:
+        return JSONResponse(status_code=400, content={"error": "No Karnataka data found to merge."})
+
+@app.post("/ireps/stop-session")
+def stop_session(session_id: str = Body(...)):
+    try:
+        print(f"[DEBUG] Stopping session: {session_id}")
+        
+        with sessions_lock:
+            session = sessions.get(session_id)
+        
+        if session:
+            # Set stop flag to signal the scraping thread to stop
+            session["stop_flag"] = True
+            print(f"[DEBUG] Stop flag set for session: {session_id}")
+            
+            # Wait for thread to finish (with timeout)
+            if session.get("scraping_thread"):
+                import threading
+                thread = session["scraping_thread"]
+                if thread.is_alive():
+                    print(f"[DEBUG] Waiting for scraping thread to finish...")
+                    thread.join(timeout=10)  # Wait up to 10 seconds
+                    if thread.is_alive():
+                        print(f"[WARNING] Scraping thread did not stop within timeout")
+            
+            # Close browser
+            if 'bot' in session:
+                try:
+                    print(f"[DEBUG] Closing browser for session: {session_id}")
+                    session['bot'].quit()
+                    print(f"[DEBUG] Browser closed for session: {session_id}")
+                except Exception as e:
+                    print(f"[ERROR] Error closing browser: {e}")
+            
+            # Remove session from memory
+            sessions.pop(session_id, None)
+        
+        print(f"[DEBUG] Session {session_id} stopped successfully")
+        return {"status": "stopped", "session_id": session_id}
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to stop session {session_id}: {e}")
+        return JSONResponse(status_code=500, content={"error": f"Failed to stop session: {str(e)}"})
+
+@app.get("/ireps/files")
+def ireps_list_files(session_id: str = Query(...)):
+    # List output files for the session
+    BASEDIR = os.path.dirname(os.path.abspath(__file__))
+    OUTPUTDIR = os.path.join(BASEDIR, "ireps", session_id)
+    print(f"[DEBUG] Listing files for session: {session_id}")
+    print(f"[DEBUG] Output directory: {OUTPUTDIR}")
+    print(f"[DEBUG] Directory exists: {os.path.exists(OUTPUTDIR)}")
+    
+    if not os.path.exists(OUTPUTDIR):
+        print(f"[DEBUG] Directory does not exist, returning empty list")
+        return {"files": []}
+    
+    all_files = os.listdir(OUTPUTDIR)
+    print(f"[DEBUG] All files in directory: {all_files}")
+    
+    files = [f for f in all_files if f.endswith(".xlsx")]
+    print(f"[DEBUG] Excel files found: {files}")
+    
+    result = {"files": files}
+    print(f"[DEBUG] Returning: {result}")
+    return result
+
+@app.get("/ireps/download/{session_id}/{filename}")
+def ireps_download_file(session_id: str, filename: str, request: Request):
+    print(f"[DEBUG] IREPS download request: {request.method} for {session_id}/{filename}")
+    BASEDIR = os.path.dirname(os.path.abspath(__file__))
+    OUTPUTDIR = os.path.join(BASEDIR, "ireps", session_id)
+    file_path = os.path.join(OUTPUTDIR, filename)
+    if not os.path.exists(file_path):
+        print(f"[ERROR] File not found: {file_path}")
+        return JSONResponse(status_code=404, content={"error": "File not found"})
+    print(f"[DEBUG] Serving file: {file_path}")
+    return FileResponse(file_path, filename=filename)
+
+@app.get("/ireps/merge-download/{session_id}")
+def ireps_merge_download(session_id: str):
+    """GEM-style merge and download endpoint for IREPS, with DB insert"""
+    import pandas as pd
+    import fnmatch
+    import pymysql
+    try:
+        BASEDIR = os.path.dirname(os.path.abspath(__file__))
+        OUTPUTDIR = os.path.join(BASEDIR, "ireps", session_id)
+        if not os.path.exists(OUTPUTDIR):
+            print(f"[ERROR] Output directory not found: {OUTPUTDIR}")
+            return JSONResponse(status_code=400, content={"error": "Output directory not found"})
+        file_prefix = "tenders_page"
+        filenames = [os.path.join(OUTPUTDIR, filename)
+                     for filename in os.listdir(OUTPUTDIR)
+                     if fnmatch.fnmatch(filename, f"{file_prefix}*.xlsx")]
+        print(f"[DEBUG] Files to merge: {filenames}")
+        if not filenames:
+            print("[ERROR] No files found to merge")
+            return JSONResponse(status_code=400, content={"error": "No Excel files found to merge"})
+        dataframes = []
+        for file_path in filenames:
+            try:
+                print(f"[DEBUG] Reading file: {os.path.basename(file_path)}")
+                df = pd.read_excel(file_path, engine='openpyxl')
+                print(f"[DEBUG] DataFrame shape: {df.shape}")
+                dataframes.append(df)
+            except Exception as e:
+                print(f"[ERROR] Error reading {file_path}: {e}")
+                continue
+        if not dataframes:
+            print("[ERROR] No valid dataframes to merge after filtering unreadable files.")
+            return JSONResponse(status_code=400, content={"error": "No valid Excel files could be read. Check file format and content."})
+        print(f"[DEBUG] Merging {len(dataframes)} dataframes")
+        merged_df = pd.concat(dataframes, ignore_index=True)
+        print(f"[DEBUG] Merged DataFrame shape: {merged_df.shape}")
+        # Remove rows where all values are null
+        merged_df = merged_df.dropna(how='all')
+        # Remove duplicate rows
+        merged_df = merged_df.drop_duplicates()
+        # Rename columns to match tender table
+        column_rename_map = {
+            'Deptt./Rly. Unit': 'department',
+            'Tender No': 'tender_no',
+            'Tender Title': 'tender_title',
+            'Status': 'status',
+            'Work Area': 'work_area',
+            'Due Date/Time': 'due_datetime'
+        }
+        merged_df.rename(columns=column_rename_map, inplace=True)
+        # Keep only the columns needed for the database
+        valid_columns = ['department', 'tender_no', 'tender_title', 'status', 'work_area', 'due_datetime']
+        merged_df = merged_df[[col for col in merged_df.columns if col in valid_columns]]
+        # Save as CSV (for download)
+        output_csv_file = os.path.join(OUTPUTDIR, f"merged_data_{session_id}.csv")
+        merged_df.to_csv(output_csv_file, index=False)
+        print(f"[DEBUG] Merged CSV file saved to: {output_csv_file}")
+        
+        # Insert into MySQL tender table
+        if not merged_df.empty:
+            try:
+                connection = pymysql.connect(
+                    host='127.0.0.1',
+                    port=3307,
+                    user='root',
+                    password='thanuja',
+                    db='toolinformation',
+                    charset='utf8mb4',
+                    cursorclass=pymysql.cursors.DictCursor
+                )
+                with connection:
+                    with connection.cursor() as cursor:
+                        cols = ','.join(f'`{col}`' for col in merged_df.columns)
+                        placeholders = ','.join(['%s'] * len(merged_df.columns))
+                        sql = f'INSERT INTO tender ({cols}) VALUES ({placeholders})'
+                        for row in merged_df.itertuples(index=False, name=None):
+                            cursor.execute(sql, row)
+                    connection.commit()
+                    print(f"[SUCCESS] Inserted {len(merged_df)} rows into tender table")
+            except Exception as e:
+                print(f"[ERROR] Failed to insert merged data into tender: {e}")
+        
+        from fastapi.responses import FileResponse
+        return FileResponse(
+            output_csv_file,
+            filename=f"merged_data_{session_id}.csv",
+            media_type='text/csv'
+        )
+    except Exception as e:
+        print(f"[ERROR] Merge process failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": f"Merge process failed: {str(e)}"}) 

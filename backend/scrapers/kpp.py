@@ -3,30 +3,15 @@ import requests.exceptions
 from os import *
 from datetime import *
 import pandas as pd
-import argparse
-
-parser = argparse.ArgumentParser(description="Scrapes data from KPP website and saves Excel files.")
-parser.add_argument("--section", type=str, required=True, help="Section name to scrape (e.g., Goods, Works, Services).")
-parser.add_argument("--gtotal", type=int, required=True, help="Total pages in Goods section.")
-parser.add_argument("--wtotal", type=int, required=True, help="Total pages in Works section.")
-parser.add_argument("--stotal", type=int, required=True, help="Total pages in Services section.")
-
-args = parser.parse_args()
-
-parser = argparse.ArgumentParser(description="Scrapes data from KPP website and saves Excel files.")
-parser.add_argument("--run_id", type=str, required=True, help="Unique run identifier.")
-args = parser.parse_args()
-
 BASE_DIR = path.dirname(path.abspath(__file__))
-OUTPUT_DIR = path.join(BASE_DIR, "outputs", "kpp", args.run_id)
-GOODS = path.join(OUTPUT_DIR, "goods")
-WORK = path.join(OUTPUT_DIR, "works")
-SERVICES = path.join(OUTPUT_DIR, "services")
-
-makedirs(GOODS, exist_ok=True)
-makedirs(WORK, exist_ok=True)
-makedirs(SERVICES, exist_ok=True)
-
+OUTPUT_DIR = path.join(BASE_DIR, "kpp")
+GOODS = path.join(OUTPUT_DIR,"goods")
+WORK = path.join(OUTPUT_DIR,"works")
+SERVICES = path.join(OUTPUT_DIR,"services")
+makedirs(OUTPUT_DIR,exist_ok=True)
+makedirs(GOODS,exist_ok=True)
+makedirs(WORK,exist_ok=True)
+makedirs(SERVICES,exist_ok=True)
 def save_to_excel(page,exdata,section,dirr):
     # print(exdata)
     if not exdata or not isinstance(exdata, list) or not all(isinstance(item, dict) for item in exdata):
@@ -202,10 +187,10 @@ def scrape_services(page,sec):
     except requests.exceptions.RequestException as e:
         print(f"An error occurred: {e}")
 
-section = args.section
-gtotal = args.gtotal
-wtotal = args.wtotal
-stotal = args.stotal
+section = input("Please Select Option (GOODS/WORKS/SERVICES):").lower().strip()
+gtotal = int(input("Enter total pages of goods:"))
+wtotal = int(input("Enter total pages for works:"))
+stotal = int(input("Enter total pages for services:"))
 if section == "goods":    
     for g in range(gtotal+1):
         print(f"Scraping {section} {g+1} page......")

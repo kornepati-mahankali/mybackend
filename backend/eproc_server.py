@@ -33,11 +33,11 @@ class WebSocketLogger:
 
 logs_buffer = []
 
-def emit_log_to_frontend(msg):
+def emit_log_to_frontend(msg, session_id=None):
     logs_buffer.append(msg)
     if len(logs_buffer) > 1000:
         logs_buffer.pop(0)
-    socketio.emit('scraping_log', {'message': msg})
+    socketio.emit('scraping_log', {'message': msg, 'session_id': session_id})
 
 # --- END: Redirect stdout/stderr to WebSocket for live logs ---
 
@@ -49,7 +49,7 @@ except ImportError:
     SERVER_HOST = '0.0.0.0'
     SERVER_PORT = 5021
     DEBUG = True
-    OUTPUT_BASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'outputs', 'gem')
+    OUTPUT_BASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'outputs', 'eproc')
 
 # Global variables
 pending_eproc_sessions = {}  # Store active Selenium sessions
@@ -145,12 +145,13 @@ def start_eproc_scraping():
                 days_interval=data.get('days_interval', 7),
                 start_page=data.get('start_page', 1),
                 captcha=data.get('captcha'),
-                log_callback=emit_log_to_frontend,
-                base_url=data.get('base_url')
+                log_callback=lambda msg: emit_log_to_frontend(msg, session_id),
+                base_url=data.get('base_url'),
+                session_id=session_id
             )
-            emit_log_to_frontend('[INFO] Scraping finished.')
+            emit_log_to_frontend('[INFO] Scraping finished.', session_id)
         except Exception as e:
-            emit_log_to_frontend(f'[ERROR] Exception in scraping thread: {e}')
+            emit_log_to_frontend(f'[ERROR] Exception in scraping thread: {e}', session_id)
         finally:
             bot.quit()
             if session_id in pending_eproc_sessions:
@@ -281,6 +282,75 @@ def list_sessions():
     except Exception as e:
         return jsonify({'error': f'Failed to list sessions: {str(e)}'}), 500
 
+@app.route('/api/delete-file/<session_id>', methods=['POST'])
+def delete_file(session_id):
+    """Delete a specific file from a session"""
+    try:
+        data = request.get_json() or {}
+        filename = data.get('filename')
+        
+        if not filename:
+            return jsonify({'error': 'Filename is required'}), 400
+        
+        session_dir = os.path.join(OUTPUT_BASE_DIR, session_id)
+        file_path = os.path.join(session_dir, filename)
+        
+        if not os.path.exists(file_path):
+            return jsonify({'error': 'File not found'}), 404
+        
+        os.remove(file_path)
+        socketio.emit('scraping_log', {'message': f'🗑️ Deleted file: {filename}'})
+        
+        return jsonify({'message': f'File {filename} deleted successfully'}), 200
+            
+    except Exception as e:
+        return jsonify({'error': f'Failed to delete file: {str(e)}'}), 500
+
+@app.route('/api/merge-download/<session_id>', methods=['GET'])
+def merge_download_files(session_id):
+    """Merge all files in a session and download as CSV"""
+    try:
+        session_dir = os.path.join(OUTPUT_BASE_DIR, session_id)
+        if not os.path.exists(session_dir):
+            return jsonify({'error': 'Session not found'}), 404
+        
+        excel_files = glob.glob(os.path.join(session_dir, '*.xlsx'))
+        if not excel_files:
+            return jsonify({'error': 'No Excel files found in session'}), 404
+        
+        # Read and merge all Excel files
+        all_data = []
+        for file_path in excel_files:
+            try:
+                df = pd.read_excel(file_path)
+                all_data.append(df)
+            except Exception as e:
+                socketio.emit('scraping_log', {'message': f'⚠️ Warning: Could not read {os.path.basename(file_path)}: {str(e)}'})
+        
+        if not all_data:
+            return jsonify({'error': 'No valid Excel files found'}), 404
+        
+        # Merge all dataframes
+        merged_df = pd.concat(all_data, ignore_index=True)
+        
+        # Save merged file as CSV
+        merged_filename = f'merged_data_{session_id}.csv'
+        merged_path = os.path.join(session_dir, merged_filename)
+        merged_df.to_csv(merged_path, index=False)
+        
+        socketio.emit('scraping_log', {'message': f'📊 Merged {len(excel_files)} files into {merged_filename}'})
+        
+        # Return the CSV file for download
+        return send_file(
+            merged_path,
+            mimetype='text/csv',
+            as_attachment=True,
+            download_name=merged_filename
+        )
+            
+    except Exception as e:
+        return jsonify({'error': f'Failed to merge and download files: {str(e)}'}), 500
+
 @socketio.on('connect')
 def handle_connect():
     """Handle client connection"""
@@ -319,4 +389,6 @@ if __name__ == '__main__':
     sys.stdout = ws_logger
     sys.stderr = ws_logger
     
-    socketio.run(app, host=SERVER_HOST, port=SERVER_PORT, debug=DEBUG) 
+    # Use allow_unsafe_werkzeug=True to work with Flask's reloader in debug mode.
+    # This is suitable for development.
+    socketio.run(app, host=SERVER_HOST, port=SERVER_PORT, debug=DEBUG, allow_unsafe_werkzeug=True) 

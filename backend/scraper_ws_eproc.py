@@ -449,7 +449,14 @@ def run_eproc_scraper_api(base_url, tender_type, days_interval, start_page, capt
         total_pages = 1
     print(f"[BIDALERT INFO] FOUND {total_pages} PAGES TO SCRAPE")
     start_page = int(start_page)
-    bot.maximize_window()
+    
+    # Try to maximize window safely, but don't fail if it doesn't work
+    try:
+        bot.maximize_window()
+        print("[DEBUG] Window maximized successfully")
+    except Exception as e:
+        print(f"[WARNING] Could not maximize window: {e}")
+        # Continue without maximizing
     for idx in range(start_page, total_pages + 1):
         all_detail = []
         print(f"[BIDALERT INFO] SCRAPING PAGE [{idx}/{total_pages}]")
@@ -718,7 +725,14 @@ def start_eproc_session():
             total_pages = 1
         print(f"[BIDALERT INFO] FOUND {total_pages} PAGES TO SCRAPE")
         start_page = int(start_page)
-        bot.maximize_window()
+        
+        # Try to maximize window safely, but don't fail if it doesn't work
+        try:
+            bot.maximize_window()
+            print("[DEBUG] Window maximized successfully")
+        except Exception as e:
+            print(f"[WARNING] Could not maximize window: {e}")
+            # Continue without maximizing
         for idx in range(start_page, total_pages + 1):
             all_detail = []
             print(f"[BIDALERT INFO] SCRAPING PAGE [{idx}/{total_pages}]")
@@ -824,7 +838,14 @@ def submit_eproc_captcha():
             total_pages = 1
         print(f"[BIDALERT INFO] FOUND {total_pages} PAGES TO SCRAPE")
         start_page = int(start_page)
-        bot.maximize_window()
+        
+        # Try to maximize window safely, but don't fail if it doesn't work
+        try:
+            bot.maximize_window()
+            print("[DEBUG] Window maximized successfully")
+        except Exception as e:
+            print(f"[WARNING] Could not maximize window: {e}")
+            # Continue without maximizing
         for idx in range(start_page, total_pages + 1):
             all_detail = []
             print(f"[BIDALERT INFO] SCRAPING PAGE [{idx}/{total_pages}]")

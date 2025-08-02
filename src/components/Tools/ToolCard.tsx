@@ -28,8 +28,13 @@ const iconMap = {
   analyze: BarChart3
 };
 
-export const ToolCard: React.FC<ToolCardProps> = ({ tool, onSelect }) => {
+export const ToolCard: React.FC<ToolCardProps> = React.memo(({ tool, onSelect }) => {
   const IconComponent = iconMap[tool.icon as keyof typeof iconMap] || Play;
+
+  // Memoize the click handler to prevent unnecessary re-renders
+  const handleClick = React.useCallback(() => {
+    onSelect(tool);
+  }, [onSelect, tool]);
 
   return (
     <motion.div
@@ -38,7 +43,7 @@ export const ToolCard: React.FC<ToolCardProps> = ({ tool, onSelect }) => {
       whileHover={{ scale: 1.02, y: -5 }}
       transition={{ duration: 0.3 }}
       className="bg-transparent dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700 hover:border-blue-500 cursor-pointer group shadow-none dark:shadow-md"
-      onClick={() => onSelect(tool)}
+      onClick={handleClick}
     >
       <div className="flex items-start justify-between mb-4">
         <div className="p-3 bg-blue-600/20 rounded-lg group-hover:bg-blue-600/30 transition-colors duration-200">
@@ -74,4 +79,6 @@ export const ToolCard: React.FC<ToolCardProps> = ({ tool, onSelect }) => {
       </div>
     </motion.div>
   );
-};
+});
+
+ToolCard.displayName = 'ToolCard';

@@ -9,8 +9,8 @@ import os
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# Store the scraping process globally
-scraping_process = None
+# Store scraping processes by run_id to allow multiple concurrent scraping
+scraping_processes = {}
 # Store the eproc scraping process separately
 scraping_process_eproc = None
 
@@ -22,20 +22,30 @@ def index():
 def favicon():
     return Response(status=204)
 
-@app.route('/api/stop-scraping', methods=['POST'])
-def stop_scraping():
-    global scraping_process
-    if scraping_process and scraping_process.poll() is None:
-        scraping_process.terminate()
-        scraping_process = None
-        return {"status": "stopped"}, 200
-    return {"status": "no process running"}, 200
+@socketio.on('connect')
+def handle_connect():
+    print('Client connected')
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print('Client disconnected')
 
 @socketio.on('start_scraping')
 def handle_start_scraping(data):
-    global scraping_process
+    global scraping_processes
     print("Received start_scraping:", data)
-    # Validate required arguments, but city_input is optional
+    
+    run_id = data.get('run_id')
+    if not run_id:
+        emit('scraping_output', {'output': '[ERROR] Missing run_id\n'}, broadcast=False)
+        return
+    
+    # Check if scraping is already running for this specific run_id
+    if run_id in scraping_processes and scraping_processes[run_id] is not None:
+        emit('scraping_output', {'output': f'[ERROR] Scraping is already running for run_id: {run_id}\n'}, broadcast=False)
+        return
+    
+    # Validate required fields (city_input and days_interval are optional)
     required_args = ['startingpage', 'totalpages', 'username', 'state_index', 'run_id']
     missing = [arg for arg in required_args if not data.get(arg)]
     if missing:
@@ -43,39 +53,72 @@ def handle_start_scraping(data):
         print(error_msg)
         emit('scraping_output', {'output': error_msg}, broadcast=False)
         return
-    # Set city_input to empty string if not provided
-    city_input = data.get('city_input', '')
-    days_interval = data.get('days_interval', '')
+    
     backend_dir = os.path.dirname(os.path.abspath(__file__))
     gem_path = os.path.join(backend_dir, "scrapers", "gem.py")
     cmd = [
-        "python", "-u", gem_path,  # -u for unbuffered output
+        "python", "-u", gem_path,
         "--startingpage", str(data['startingpage']),
         "--totalpages", str(data['totalpages']),
         "--username", data['username'],
         "--state_index", str(data['state_index']),
-        "--city_input", city_input,
-        "--days_interval", str(days_interval),
+        "--city_input", data.get('city_input', ''),
+        "--days_interval", str(data.get('days_interval', 1)),
         "--run_id", data['run_id']
     ]
     print("Running command:", " ".join(cmd))
+    
     try:
-        scraping_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=backend_dir)
-        for line in iter(scraping_process.stdout.readline, ''):
+        scraping_processes[run_id] = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=backend_dir)
+        for line in iter(scraping_processes[run_id].stdout.readline, ''):
             print("OUTPUT:", line.strip())
             emit('scraping_output', {'output': line}, broadcast=False)
             if line.startswith("File written:"):
-                filename = line.split("File written:", 1)[1].strip()
+                full_path = line.split("File written:", 1)[1].strip()
+                # Extract just the filename from the full path
+                filename = os.path.basename(full_path)
                 emit('file_written', {'filename': filename, 'run_id': data['run_id']}, broadcast=False)
             eventlet.sleep(0)  # Yield to eventlet for better real-time streaming
-        scraping_process.stdout.close()
-        scraping_process.wait()
+        scraping_processes[run_id].stdout.close()
+        scraping_processes[run_id].wait()
         emit('scraping_output', {'output': 'SCRAPING COMPLETED\n'}, broadcast=False)
-        scraping_process = None
+        scraping_processes[run_id] = None
+        # Clean up the completed process from the dictionary
+        if run_id in scraping_processes:
+            del scraping_processes[run_id]
     except Exception as e:
         print("Error running gem.py:", e)
         emit('scraping_output', {'output': f'Error: {e}\n'}, broadcast=False)
-        scraping_process = None
+        scraping_processes[run_id] = None
+        # Clean up the failed process from the dictionary
+        if run_id in scraping_processes:
+            del scraping_processes[run_id]
+
+@socketio.on('stop_scraping')
+def handle_stop_scraping(data):
+    global scraping_processes
+    run_id = data.get('run_id')
+    if not run_id:
+        emit('scraping_output', {'output': '[ERROR] Missing run_id\n'}, broadcast=False)
+        return
+    
+    if run_id in scraping_processes and scraping_processes[run_id] is not None:
+        try:
+            scraping_processes[run_id].terminate()
+            scraping_processes[run_id].wait(timeout=5)
+            emit('scraping_output', {'output': f'[INFO] Scraping stopped for run_id: {run_id}\n'}, broadcast=False)
+        except subprocess.TimeoutExpired:
+            scraping_processes[run_id].kill()
+            emit('scraping_output', {'output': f'[INFO] Scraping force killed for run_id: {run_id}\n'}, broadcast=False)
+        except Exception as e:
+            emit('scraping_output', {'output': f'[ERROR] Error stopping scraping: {e}\n'}, broadcast=False)
+        finally:
+            scraping_processes[run_id] = None
+            # Clean up the stopped process from the dictionary
+            if run_id in scraping_processes:
+                del scraping_processes[run_id]
+    else:
+        emit('scraping_output', {'output': f'[INFO] No scraping process found for run_id: {run_id}\n'}, broadcast=False)
 
 @socketio.on('start_eproc_scraping')
 def handle_start_eproc_scraping(data):

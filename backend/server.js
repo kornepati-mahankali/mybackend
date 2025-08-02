@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const WebSocket = require('ws');
 const http = require('http');
+const archiver = require('archiver');
 require('dotenv').config();
 
 const app = express();
@@ -23,6 +24,11 @@ const pool = new Pool({
 app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
+
+// Test endpoint
+app.get('/api/test', (req, res) => {
+  res.json({ message: 'Server is running correctly!', timestamp: new Date().toISOString() });
+});
 
 // File upload configuration
 const storage = multer.diskStorage({
@@ -150,6 +156,72 @@ app.post('/api/auth/logout', authenticateToken, (req, res) => {
   res.json({ message: 'Logged out successfully' });
 });
 
+// Change Password Endpoint
+app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { currentPassword, newPassword, confirmNewPassword } = req.body;
+
+    if (!currentPassword || !newPassword || !confirmNewPassword) {
+      return res.status(400).json({ error: 'All fields are required.' });
+    }
+    if (newPassword !== confirmNewPassword) {
+      return res.status(400).json({ error: 'New passwords do not match.' });
+    }
+    // Get user from DB
+    const result = await pool.query('SELECT password_hash FROM users WHERE id = $1', [userId]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+    const user = result.rows[0];
+    // Check current password
+    const validPassword = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!validPassword) {
+      return res.status(401).json({ error: 'Current password is incorrect.' });
+    }
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    // Update password in DB
+    await pool.query('UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2', [hashedPassword, userId]);
+    res.json({ message: 'Password updated successfully.' });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({ error: 'Failed to change password.' });
+  }
+});
+
+// Delete Account Endpoint
+app.delete('/api/auth/delete-account', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { password } = req.body;
+
+    if (!password) {
+      return res.status(400).json({ error: 'Password is required for account deletion.' });
+    }
+
+    // Get user from DB
+    const result = await pool.query('SELECT password_hash FROM users WHERE id = $1', [userId]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+    const user = result.rows[0];
+
+    // Verify password
+    const validPassword = await bcrypt.compare(password, user.password_hash);
+    if (!validPassword) {
+      return res.status(401).json({ error: 'Incorrect password.' });
+    }
+
+    // Delete user from DB
+    await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+    res.json({ message: 'Account deleted successfully.' });
+  } catch (error) {
+    console.error('Delete account error:', error);
+    res.status(500).json({ error: 'Failed to delete account.' });
+  }
+});
+
 // User Management Routes (Admin/Super Admin)
 app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -262,6 +334,135 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
   }
 });
 
+// Export all user data
+app.get('/api/export-data', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    // Get user profile data
+    const userResult = await pool.query(
+      'SELECT id, email, username, role, created_at, updated_at, last_login FROM users WHERE id = $1',
+      [userId]
+    );
+    
+    // Get user's scraping jobs
+    const jobsResult = await pool.query(
+      'SELECT j.*, t.name as tool_name FROM tools_1 j JOIN tools t ON j.tool_id = t.id WHERE j.user_id = $1 ORDER BY j.created_at DESC',
+      [userId]
+    );
+    
+    // Get user's tools (if any are assigned to them)
+    const toolsResult = await pool.query(
+      'SELECT * FROM tools WHERE created_by = $1 OR is_active = true ORDER BY created_at DESC',
+      [userId]
+    );
+    
+    // Get available output files information
+    const outputDirs = ['gem', 'ireps', 'eproc', 'ap'];
+    const availableFiles = [];
+    
+    for (const dir of outputDirs) {
+      const outputPath = path.join(__dirname, 'outputs', dir);
+      if (fs.existsSync(outputPath)) {
+        const files = fs.readdirSync(outputPath, { withFileTypes: true });
+        for (const file of files) {
+          if (file.isDirectory()) {
+            const subDirPath = path.join(outputPath, file.name);
+            const subFiles = fs.readdirSync(subDirPath);
+            availableFiles.push({
+              tool: dir.toUpperCase(),
+              sessionId: file.name,
+              files: subFiles.filter(f => f.endsWith('.xlsx') || f.endsWith('.csv')),
+              path: path.join('outputs', dir, file.name)
+            });
+          }
+        }
+      }
+    }
+    
+    // Prepare export data
+    const exportData = {
+      exportDate: new Date().toISOString(),
+      user: userResult.rows[0] || null,
+      scrapingJobs: jobsResult.rows || [],
+      tools: toolsResult.rows || [],
+      availableFiles: availableFiles,
+      summary: {
+        totalJobs: jobsResult.rows.length,
+        completedJobs: jobsResult.rows.filter(job => job.status === 'completed').length,
+        failedJobs: jobsResult.rows.filter(job => job.status === 'failed').length,
+        runningJobs: jobsResult.rows.filter(job => job.status === 'running').length,
+        totalTools: toolsResult.rows.length,
+        totalOutputFiles: availableFiles.reduce((sum, dir) => sum + dir.files.length, 0),
+        availableSessions: availableFiles.length
+      }
+    };
+    
+    // Set headers for file download
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="user_data_${userId}_${Date.now()}.json"`);
+    
+    res.json(exportData);
+    
+  } catch (error) {
+    console.error('Export data error:', error);
+    res.status(500).json({ error: 'Failed to export data' });
+  }
+});
+
+// Download all output files as zip
+app.get('/api/export-files', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    // Create a zip archive
+    const archive = archiver('zip', {
+      zlib: { level: 9 } // Sets the compression level
+    });
+    
+    // Handle archive errors
+    archive.on('error', (err) => {
+      console.error('Archive error:', err);
+      res.status(500).json({ error: 'Failed to create archive' });
+    });
+    
+    // Set headers for file download
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="output_files_${userId}_${Date.now()}.zip"`);
+    
+    // Pipe archive data to the response
+    archive.pipe(res);
+    
+    // Add output directories to the zip
+    const outputDirs = ['gem', 'ireps', 'eproc', 'ap'];
+    let hasFiles = false;
+    
+    for (const dir of outputDirs) {
+      const outputPath = path.join(__dirname, 'outputs', dir);
+      if (fs.existsSync(outputPath)) {
+        const files = fs.readdirSync(outputPath);
+        if (files.length > 0) {
+          // Add the entire directory to the zip
+          archive.directory(outputPath, `outputs/${dir}`);
+          hasFiles = true;
+        }
+      }
+    }
+    
+    if (!hasFiles) {
+      // If no files found, create an empty zip with a readme
+      archive.append('No output files found at the time of export.', { name: 'README.txt' });
+    }
+    
+    // Finalize the archive
+    await archive.finalize();
+    
+  } catch (error) {
+    console.error('Export files error:', error);
+    res.status(500).json({ error: 'Failed to export files' });
+  }
+});
+
 // System Metrics (Super Admin)
 app.get('/api/admin/system-metrics', authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
@@ -286,55 +487,28 @@ app.get('/api/admin/system-metrics', authenticateToken, requireSuperAdmin, async
   }
 });
 
-// Simulate scraping job
+// Job processing - now handled by the job_processor.py
+// The job processor will automatically pick up pending jobs and process them
 async function startScrapingJob(jobId) {
   try {
-    await pool.query('UPDATE tools_1 SET status = $1, start_time = NOW() WHERE id = $2', ['running', jobId]);
+    // Just update the job status to pending - the job processor will handle the rest
+    await pool.query('UPDATE tools_1 SET status = $1 WHERE id = $2', ['pending', jobId]);
     
-    // Simulate progress updates
-    for (let progress = 0; progress <= 100; progress += 10) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      await pool.query('UPDATE tools_1 SET progress = $1 WHERE id = $2', [progress, jobId]);
-      
-      // Broadcast progress to WebSocket clients
-      wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({
-            type: 'progress',
-            jobId,
-            progress,
-            message: `Processing... ${progress}%`
-          }));
-        }
-      });
-    }
-
-    // Complete job
-    const outputFiles = [
-      `job_${jobId}_output.csv`,
-      `job_${jobId}_output.json`,
-      `job_${jobId}_output.xlsx`
-    ];
-
-    await pool.query(
-      'UPDATE tools_1 SET status = $1, progress = $2, end_time = NOW(), output_files = $3 WHERE id = $4',
-      ['completed', 100, JSON.stringify(outputFiles), jobId]
-    );
-
+    console.log(`Job ${jobId} queued for processing`);
+    
+    // Broadcast job queued to WebSocket clients
     wss.clients.forEach(client => {
       if (client.readyState === WebSocket.OPEN) {
         client.send(JSON.stringify({
-          type: 'completed',
+          type: 'queued',
           jobId,
-          outputFiles,
-          message: 'Job completed successfully!'
+          message: 'Job queued for processing'
         }));
       }
     });
 
   } catch (error) {
-    console.error('Job execution error:', error);
+    console.error('Job queuing error:', error);
     await pool.query('UPDATE tools_1 SET status = $1 WHERE id = $2', ['failed', jobId]);
   }
 }

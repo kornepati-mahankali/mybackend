@@ -12,7 +12,7 @@ export interface User {
 export interface Tool {
   id?: string;
   name: string;
-  category?: 'gem' | 'global' | 'all' | 'eprocurement';
+  category?: 'gem' | 'global' | 'all' | 'eprocurement' | 'ireps';
   description: string;
   icon?: string;
   isActive?: boolean;
