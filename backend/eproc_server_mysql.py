@@ -19,11 +19,11 @@ from scrapers.search import run_eproc_scraper_with_bot
 from database_operations_mysql import EProcurementDBMySQL
 # Set environment variables directly for MySQL connection
 import os
-os.environ['DB_HOST'] = 'localhost'
-os.environ['DB_PORT'] = '3307'
+os.environ['DB_HOST'] = '54.149.111.114'
+os.environ['DB_PORT'] = '3306'
 os.environ['DB_USER'] = 'root'
 os.environ['DB_PASSWORD'] = 'thanuja'
-os.environ['DB_NAME'] = 'toolinformation'
+os.environ['DB_NAME'] = 'toolinfomation'
 
 app = Flask(__name__)
 CORS(app)

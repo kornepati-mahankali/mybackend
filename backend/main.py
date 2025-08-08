@@ -10,6 +10,15 @@ import datetime
 from dotenv import load_dotenv
 load_dotenv()
 
+# Import database configuration
+try:
+    from backend.database_config import DATABASE_URL, test_database_connection
+    print(f"Database URL: {DATABASE_URL}")
+    # Test database connection on startup
+    test_database_connection()
+except ImportError as e:
+    print(f"Warning: Could not import database configuration: {e}")
+
 # Ensure these imports point to actual router objects
 import sys
 import os
@@ -47,7 +56,14 @@ app = FastAPI()
 # Configure CORS correctly
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Frontend origin (like Vite or React dev server)
+    allow_origins=[
+        "http://localhost:5173",  # Frontend origin (like Vite or React dev server)
+        "http://localhost:3000",  # Alternative frontend port
+        "https://lavangam-app-us-west-2.s3-website-us-west-2.amazonaws.com",  # Your S3 frontend
+        "https://*.elasticbeanstalk.com",  # AWS Elastic Beanstalk
+        "https://*.amazonaws.com",  # AWS domains
+        "*"  # Allow all origins for now - you can restrict this later
+    ],
     allow_credentials=True,
     allow_methods=["*"],                      # Allow all methods: GET, POST, PUT, etc.
     allow_headers=["*"],                      # Allow all headers
@@ -174,23 +190,22 @@ def dashboard_overview():
         "systemStatus": system_status
     })
 
-@app.get("/api/admin/supabase-users")
-async def get_supabase_users():
-    # Use the service role key directly
+@app.get("/main/api/admin/supabase-users")
+async def get_supabase_users_main():
+    # Use the service role key directly (for admin access)
     service_role_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpqZmphZXp6dGZ5ZGlyeXpzeXZkIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1MTAyNzAyMSwiZXhwIjoyMDY2NjAzMDIxfQ.sRbGz6wbBoMmY8Ol3vEPc4VOh2oEWpcONi9DkUsTpKk"
     supabase_url = "https://zjfjaezztfydiryzsyvd.supabase.co"
-    
     try:
         # Create Supabase client with service role key
+        from supabase import create_client
         supabase_admin = create_client(supabase_url, service_role_key)
-        
         # Fetch users from Supabase Auth
         response = supabase_admin.auth.admin.list_users()
-        
         if hasattr(response, 'user') and response.user:
             users = response.user
         else:
             # Fallback: try direct API call
+            import requests
             url = f"{supabase_url}/auth/v1/admin/users"
             headers = {
                 "apikey": service_role_key,
@@ -211,7 +226,7 @@ async def get_supabase_users():
                             "is_active": True,
                         },
                         {
-                            "id": "mock-user-2", 
+                            "id": "mock-user-2",
                             "email": "user@example.com",
                             "created_at": "2024-01-15T00:00:00Z",
                             "last_sign_in_at": "2024-07-30T10:30:00Z",
@@ -221,7 +236,6 @@ async def get_supabase_users():
                     ]
                 }
             users = api_response.json().get("users", [])
-        
         # Format user data
         user_list = [
             {
@@ -250,7 +264,7 @@ async def get_supabase_users():
                 },
                 {
                     "id": "mock-user-2",
-                    "email": "user@example.com", 
+                    "email": "user@example.com",
                     "created_at": "2024-01-15T00:00:00Z",
                     "last_sign_in_at": "2024-07-30T10:30:00Z",
                     "role": "user",
@@ -259,7 +273,7 @@ async def get_supabase_users():
                 {
                     "id": "mock-user-3",
                     "email": "test@example.com",
-                    "created_at": "2024-02-01T00:00:00Z", 
+                    "created_at": "2024-02-01T00:00:00Z",
                     "last_sign_in_at": "2024-07-29T15:45:00Z",
                     "role": "user",
                     "is_active": False,

@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Analytics API", version="1.0.0")
 
+@app.get("/")
+def read_root():
+    return {"message": "FastAPI is working!"}
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -25,11 +29,11 @@ app.add_middleware(
 
 # Database configuration - using the same config as admin_metrics_api
 DB_CONFIG = {
-    'host': '127.0.0.1',
-    'port': 3307,
+    'host': '54.149.111.114',
+    'port': 3306,
     'user': 'root',
     'password': 'thanuja',
-    'db': 'toolinformation',
+    'db': 'toolinfomation',
     'charset': 'utf8mb4',
     'cursorclass': pymysql.cursors.DictCursor
 }

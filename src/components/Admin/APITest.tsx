@@ -10,16 +10,17 @@ const APITest: React.FC = () => {
     try {
       setLoading(true);
       setError('');
-      console.log('🧪 Testing API connection...');
       
-      const timestamp = new Date().getTime();
-      const response = await axios.get(`http://localhost:8001/admin-metrics?t=${timestamp}`);
+      // Use admin metrics API on port 8001
+      const API_BASE_URL = window.location.hostname === 'localhost' 
+        ? 'http://localhost:8001'
+        : 'https://lavangam-minimal-backend-env.eba-22qprjmg.us-east-1.elasticbeanstalk.com';
       
-      console.log('✅ API Response:', response.data);
+      const response = await axios.get(`${API_BASE_URL}/admin-metrics`);
       setData(response.data);
     } catch (err: any) {
-      console.error('❌ API Error:', err);
-      setError(err.message || 'Unknown error');
+      console.error('API Error:', err);
+      setError(err.response?.data?.detail || err.message || 'Failed to connect to admin metrics API');
     } finally {
       setLoading(false);
     }

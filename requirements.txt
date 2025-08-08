@@ -1,0 +1,11 @@
+flask
+eventlet
+psutil
+webdriver_manager
+uvicorn
+
+
+
+
+
+

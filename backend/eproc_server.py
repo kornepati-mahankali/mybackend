@@ -107,8 +107,10 @@ def open_edge():
 
         # Path to your msedgedriver
         edge_driver_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scrapers', 'edgedriver_win64', 'msedgedriver.exe')
+        print(f"[DEBUG] Checking Edge WebDriver at: {edge_driver_path}")
+        print(f"[DEBUG] Edge WebDriver exists: {os.path.exists(edge_driver_path)}")
         if not os.path.exists(edge_driver_path):
-            return jsonify({'error': 'Edge WebDriver not found at specified path'}), 500
+            return jsonify({'error': f'Edge WebDriver not found at {edge_driver_path}'}), 500
         
         options = Options()
         # Add any options you need, e.g., options.add_argument('--headless')

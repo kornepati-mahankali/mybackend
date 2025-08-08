@@ -87,28 +87,28 @@ def merge_download(run_id):
     column_rename_map = {
         'user name': 'user_name',
         'Bid No': 'bid_no',
-        'Name of Work': 'name_of_work',  # Added for Excel files with this header
+        'Name of Work': 'name_of_work',
         'name of Wc': 'name_of_work',
         'category': 'category',
-        'Ministry and Department': 'department_name',  # Added for Excel files with this header
-        'and Depa': 'department_name',
+        'Ministry and Department': 'ministry_and_department',
+        'and Depa': 'ministry_and_department',
         'Quantity': 'quantity',
         'EMD': 'emd',
-        'Exemption': 'exemption_allowed',
-        'Estimation Value': 'estimation_value',  # Added for Excel files with this header
+        'Exemption': 'exemption',
+        'Estimation Value': 'estimation_value',
         'mation Va': 'estimation_value',
         'state': 'state',
         'location': 'location',
-        'Apply Mode': 'apply_mode',  # Added for Excel files with this header
+        'Apply Mode': 'apply_mode',
         'Apply Mod': 'apply_mode',
-        'Website Link': 'website_link',  # Added for Excel files with this header
+        'Website Link': 'website_link',
         'ebsite Li': 'website_link',
-        'Document Link': 'document_link',  # Added for Excel files with this header
-        'Document link': 'document_link',  # Added for Excel files with this header (lowercase 'l')
+        'Document Link': 'document_link',
+        'Document link': 'document_link',
         'cument li': 'document_link',
-        'Attachment Link': 'attachment_link',  # Added for Excel files with this header
-        'Attachment link': 'attachment_link',  # Added for Excel files with this header (lowercase 'l')
-        'tachment l': 'attachment_link',  # Fixed typo: attachement_link -> attachment_link
+        'Attachment Link': 'attachment_link',
+        'Attachment link': 'attachment_link',
+        'tachment l': 'attachment_link',
         'End Date': 'end_date',
     }
     merged_df.rename(columns=column_rename_map, inplace=True)
@@ -118,8 +118,8 @@ def merge_download(run_id):
 
     # Keep only columns that match the MySQL table
     valid_columns = [
-        'user_name', 'bid_no', 'name_of_work', 'category', 'department_name',
-        'quantity', 'emd', 'exemption_allowed', 'estimation_value', 'state',
+        'user_name', 'bid_no', 'name_of_work', 'category', 'ministry_and_department',
+        'quantity', 'emd', 'exemption', 'estimation_value', 'state',
         'location', 'apply_mode', 'website_link', 'document_link', 'attachment_link', 'end_date'
     ]
     merged_df = merged_df[[col for col in merged_df.columns if col in valid_columns]]
@@ -133,33 +133,29 @@ def merge_download(run_id):
     # Save merged data as CSV
     merged_df.to_csv(csv_filepath, index=False, encoding='utf-8')
     
-    # --- Insert merged data into MySQL gem_data table ---
+    # --- Insert merged data into MySQL gem_data table (AWS) ---
     if not merged_df.empty:
         try:
             connection = pymysql.connect(
-                host='127.0.0.1',
-                port=3307,
+                host='54.149.111.114',
+                port=3306,
                 user='root',
                 password='thanuja',
-                db='toolinformation',
+                db='toolinfomation',
                 charset='utf8mb4',
                 cursorclass=pymysql.cursors.DictCursor
             )
             with connection:
                 with connection.cursor() as cursor:
-                    # Clear existing data (optional, comment out if not needed)
-                    # cursor.execute('TRUNCATE TABLE gem_data')
-                    # Prepare insert statement
                     cols = ','.join(f'`{col}`' for col in merged_df.columns)
                     placeholders = ','.join(['%s'] * len(merged_df.columns))
                     sql = f'INSERT INTO gem_data ({cols}) VALUES ({placeholders})'
-                    # Insert each row
                     for row in merged_df.itertuples(index=False, name=None):
                         cursor.execute(sql, row)
                 connection.commit()
-                print(f"[SUCCESS] Inserted {len(merged_df)} rows into gem_data table")
+                print(f"[SUCCESS] Inserted {len(merged_df)} rows into gem_data table (AWS)")
         except Exception as e:
-            print(f"[ERROR] Failed to insert merged data into gem_data: {e}")
+            print(f"[ERROR] Failed to insert merged data into gem_data (AWS): {e}")
     # --- End MySQL insert ---
 
     # Return CSV file for download
@@ -312,15 +308,15 @@ def ireps_merge_download(run_id):
     # Save as CSV
     merged_df.to_csv(csv_filepath, index=False, encoding='utf-8')
 
-    # Insert into MySQL
+    # Insert into MySQL (AWS) for IREPS 'tender' table
     if not merged_df.empty:
         try:
             connection = pymysql.connect(
-                host='127.0.0.1',
-                port=3307,
+                host='54.149.111.114',
+                port=3306,
                 user='root',
                 password='thanuja',
-                db='toolinformation',
+                db='toolinfomation',
                 charset='utf8mb4',
                 cursorclass=pymysql.cursors.DictCursor
             )
@@ -328,12 +324,12 @@ def ireps_merge_download(run_id):
                 with connection.cursor() as cursor:
                     cols = ','.join(f'`{col}`' for col in merged_df.columns)
                     placeholders = ','.join(['%s'] * len(merged_df.columns))
-                    sql = f'INSERT INTO tenders ({cols}) VALUES ({placeholders})'
+                    sql = f'INSERT INTO tender ({cols}) VALUES ({placeholders})'
                     for row in merged_df.itertuples(index=False, name=None):
                         cursor.execute(sql, row)
                 connection.commit()
         except Exception as e:
-            print(f"[ERROR] Failed to insert merged data into tenders: {e}")
+            print(f"[ERROR] Failed to insert merged data into tender (AWS): {e}")
 
     # Return CSV file for download
     with open(csv_filepath, 'rb') as f:

@@ -68,7 +68,11 @@ export const AdminPanel: React.FC = () => {
     try {
       // Add timestamp to prevent caching
       const timestamp = new Date().getTime();
-      const response = await axios.get<AdminMetrics>(`http://localhost:8001/admin-metrics?t=${timestamp}`);
+      // Use admin metrics API on port 8001
+      const API_BASE_URL = window.location.hostname === 'localhost' 
+        ? 'http://localhost:8001'
+        : 'https://lavangam-minimal-backend-env.eba-22qprjmg.us-east-1.elasticbeanstalk.com';
+      const response = await axios.get<AdminMetrics>(`${API_BASE_URL}/admin-metrics?t=${timestamp}`);
       setAdminMetrics(response.data);
       setMetricsError('');
     } catch (err: any) {
@@ -101,7 +105,11 @@ export const AdminPanel: React.FC = () => {
     // Initial connection test
     const testConnection = async () => {
       try {
-        const response = await axios.get('http://localhost:8001/test');
+        // Use dynamic URL based on environment
+        const API_BASE_URL = window.location.hostname === 'localhost' 
+          ? 'http://localhost:8001'
+          : 'https://lavangam-minimal-backend-env.eba-22qprjmg.us-east-1.elasticbeanstalk.com';
+        const response = await axios.get(`${API_BASE_URL}/test`);
         console.log('✅ API connection test successful:', response.data);
         fetchAdminMetrics(); // If test passes, fetch metrics
       } catch (err) {
@@ -159,22 +167,22 @@ export const AdminPanel: React.FC = () => {
           },
           {
             title: 'System Load',
-            value: systemLoad ? `${systemLoad.cpu_percent.toFixed(1)}%` : '76%',
+            value: systemLoad ? `${systemLoad.cpu_percent.toFixed(1)}%` : '43.7%',
             change: systemLoad ? (systemLoad.cpu_percent > 80 ? 'High' : systemLoad.cpu_percent > 50 ? 'Normal' : 'Low') : 'Normal',
             icon: Server,
             color: 'green'
           },
           {
             title: 'Database Size',
-            value: databaseSize ? databaseSize.total_size : '0B',
+            value: databaseSize ? databaseSize.total_size : '128.0KB',
             change: databaseSize ? `${databaseSize.today_growth} today` : '0B today',
             icon: Database,
             color: 'purple'
           },
           {
             title: 'Active Jobs',
-            value: jobsInfo ? jobsInfo.active_jobs.toString() : '4',
-            change: jobsInfo ? `${jobsInfo.queued_jobs} queued` : '4 queued',
+            value: jobsInfo ? jobsInfo.active_jobs.toString() : '0',
+            change: jobsInfo ? `${jobsInfo.queued_jobs} queued` : '0 queued',
             icon: Activity,
             color: 'orange'
           }

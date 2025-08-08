@@ -1,0 +1,404 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Lavangam Backend Infrastructure on AWS EC2'
+
+Parameters:
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+
+  InstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedValues:
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+      - m5.large
+      - m5.xlarge
+    Description: EC2 instance type
+
+  VolumeSize:
+    Type: Number
+    Default: 50
+    MinValue: 20
+    MaxValue: 1000
+    Description: Size of the root volume in GB
+
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues:
+      - development
+      - staging
+      - production
+    Description: Environment name
+
+Resources:
+  # Security Group for Lavangam Backend
+  LavangamSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Lavangam backend services
+      GroupName: !Sub '${Environment}-lavangam-backend-sg'
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        # SSH
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH access
+        # HTTP
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP access
+        # HTTPS
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS access
+        # Main API
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          CidrIp: 0.0.0.0/0
+          Description: Main API
+        # Scrapers API
+        - IpProtocol: tcp
+          FromPort: 5022
+          ToPort: 5022
+          CidrIp: 0.0.0.0/0
+          Description: Scrapers API
+        # System Usage API
+        - IpProtocol: tcp
+          FromPort: 5024
+          ToPort: 5024
+          CidrIp: 0.0.0.0/0
+          Description: System Usage API
+        # Dashboard API
+        - IpProtocol: tcp
+          FromPort: 8004
+          ToPort: 8004
+          CidrIp: 0.0.0.0/0
+          Description: Dashboard API
+        # File Manager
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          CidrIp: 0.0.0.0/0
+          Description: File Manager
+        # Scraper WebSocket
+        - IpProtocol: tcp
+          FromPort: 5001
+          ToPort: 5001
+          CidrIp: 0.0.0.0/0
+          Description: Scraper WebSocket
+        # Admin Metrics API
+        - IpProtocol: tcp
+          FromPort: 5025
+          ToPort: 5025
+          CidrIp: 0.0.0.0/0
+          Description: Admin Metrics API
+        # E-Procurement Server
+        - IpProtocol: tcp
+          FromPort: 5002
+          ToPort: 5002
+          CidrIp: 0.0.0.0/0
+          Description: E-Procurement Server
+        # Dashboard WebSocket
+        - IpProtocol: tcp
+          FromPort: 8765
+          ToPort: 8765
+          CidrIp: 0.0.0.0/0
+          Description: Dashboard WebSocket
+        # MySQL Database
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: 0.0.0.0/0
+          Description: MySQL Database
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: All outbound traffic
+
+  # VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-lavangam-vpc'
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-lavangam-igw'
+
+  # Attach Internet Gateway to VPC
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public Subnet
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-lavangam-public-subnet'
+
+  # Route Table
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-lavangam-public-routes'
+
+  # Route to Internet Gateway
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # Associate Route Table with Subnet
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # EC2 Instance
+  LavangamInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0c02fb55956c7d316  # Ubuntu 22.04 LTS in us-west-2
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      SecurityGroupIds:
+        - !Ref LavangamSecurityGroup
+      SubnetId: !Ref PublicSubnet
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: !Ref VolumeSize
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          
+          # Update system
+          apt update && apt upgrade -y
+          
+          # Install required packages
+          apt install -y python3 python3-pip python3-venv nginx mysql-server mysql-client chromium-browser chromium-chromedriver curl wget git unzip htop ufw
+          
+          # Install Node.js
+          curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+          apt-get install -y nodejs
+          
+          # Setup MySQL
+          systemctl start mysql
+          systemctl enable mysql
+          
+          # Secure MySQL
+          mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'Lavangam@2024';"
+          mysql -e "DELETE FROM mysql.user WHERE User='';"
+          mysql -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');"
+          mysql -e "DROP DATABASE IF EXISTS test;"
+          mysql -e "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';"
+          mysql -e "FLUSH PRIVILEGES;"
+          
+          # Create database and user
+          mysql -e "CREATE DATABASE IF NOT EXISTS toolinformation;"
+          mysql -e "CREATE USER IF NOT EXISTS 'lavangam'@'localhost' IDENTIFIED BY 'Lavangam@2024';"
+          mysql -e "GRANT ALL PRIVILEGES ON toolinformation.* TO 'lavangam'@'localhost';"
+          mysql -e "FLUSH PRIVILEGES;"
+          
+          # Create application directory
+          mkdir -p /opt/lavangam
+          chown ubuntu:ubuntu /opt/lavangam
+          
+          # Download deployment script
+          cd /opt/lavangam
+          wget -O deploy_to_aws.sh https://raw.githubusercontent.com/your-repo/lavangam/main/backend/deploy_to_aws.sh
+          chmod +x deploy_to_aws.sh
+          
+          # Run deployment script
+          sudo -u ubuntu ./deploy_to_aws.sh
+          
+          # Setup firewall
+          ufw --force enable
+          ufw allow ssh
+          ufw allow 80
+          ufw allow 443
+          ufw allow 8000
+          ufw allow 5022
+          ufw allow 5024
+          ufw allow 8004
+          ufw allow 5000
+          ufw allow 5001
+          ufw allow 5025
+          ufw allow 5002
+          ufw allow 8765
+          
+          # Create a simple health check script
+          cat > /opt/lavangam/health_check.sh << 'EOF'
+          #!/bin/bash
+          echo "Health check at $(date)"
+          systemctl is-active --quiet lavangam-main-api && echo "Main API: OK" || echo "Main API: FAILED"
+          systemctl is-active --quiet nginx && echo "Nginx: OK" || echo "Nginx: FAILED"
+          systemctl is-active --quiet mysql && echo "MySQL: OK" || echo "MySQL: FAILED"
+          EOF
+          chmod +x /opt/lavangam/health_check.sh
+          
+          # Setup cron job for health checks
+          (crontab -l 2>/dev/null; echo "*/5 * * * * /opt/lavangam/health_check.sh >> /var/log/lavangam-health.log 2>&1") | crontab -
+          
+          echo "Deployment completed successfully!"
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-lavangam-backend'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: Lavangam
+
+  # Elastic IP
+  ElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref LavangamInstance
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-lavangam-eip'
+
+  # Application Load Balancer (Optional)
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${Environment}-lavangam-alb'
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref PublicSubnet
+      SecurityGroups:
+        - !Ref LavangamSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-lavangam-alb'
+
+  # Target Group
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${Environment}-lavangam-tg'
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Targets:
+        - Id: !Ref LavangamInstance
+          Port: 80
+
+  # Listener
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+Outputs:
+  InstanceId:
+    Description: Instance ID of the Lavangam backend server
+    Value: !Ref LavangamInstance
+    Export:
+      Name: !Sub '${Environment}-lavangam-instance-id'
+
+  PublicIP:
+    Description: Public IP address of the Lavangam backend server
+    Value: !Ref ElasticIP
+    Export:
+      Name: !Sub '${Environment}-lavangam-public-ip'
+
+  LoadBalancerDNS:
+    Description: DNS name of the Application Load Balancer
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub '${Environment}-lavangam-alb-dns'
+
+  MainAPIURL:
+    Description: URL for the Main API
+    Value: !Sub 'http://${ElasticIP}/api/'
+    Export:
+      Name: !Sub '${Environment}-lavangam-main-api-url'
+
+  ScrapersAPIURL:
+    Description: URL for the Scrapers API
+    Value: !Sub 'http://${ElasticIP}/scrapers/'
+    Export:
+      Name: !Sub '${Environment}-lavangam-scrapers-api-url'
+
+  DashboardAPIURL:
+    Description: URL for the Dashboard API
+    Value: !Sub 'http://${ElasticIP}/dashboard/'
+    Export:
+      Name: !Sub '${Environment}-lavangam-dashboard-api-url'
+
+  AdminMetricsURL:
+    Description: URL for the Admin Metrics API
+    Value: !Sub 'http://${ElasticIP}/admin/'
+    Export:
+      Name: !Sub '${Environment}-lavangam-admin-metrics-url'
+
+  FileManagerURL:
+    Description: URL for the File Manager
+    Value: !Sub 'http://${ElasticIP}/files/'
+    Export:
+      Name: !Sub '${Environment}-lavangam-file-manager-url'
+
+  EProcurementURL:
+    Description: URL for the E-Procurement Server
+    Value: !Sub 'http://${ElasticIP}/eproc/'
+    Export:
+      Name: !Sub '${Environment}-lavangam-eproc-url'
+
+  SSHCommand:
+    Description: SSH command to connect to the instance
+    Value: !Sub 'ssh -i your-key.pem ubuntu@${ElasticIP}'
+    Export:
+      Name: !Sub '${Environment}-lavangam-ssh-command' 

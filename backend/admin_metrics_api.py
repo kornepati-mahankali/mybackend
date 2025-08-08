@@ -1,12 +1,105 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import psutil
 import pymysql
 import os
 import json
-from datetime import datetime, date
-from typing import Dict, Any
+from supabase import create_client, Client
+
+# Initialize Supabase client with service role key for enhanced access
+supabase_url = "https://zjfjaezztfydiryzsyvd.supabase.co"
+supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpqZmphZXp6dGZ5ZGlyeXpzeXZkIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1MTAyNzAyMSwiZXhwIjoyMDY2NjAzMDIxfQ.sRbGz6wbBoMmY8Ol3vEPc4VOh2oEWpcONi9DkUsTpKk"
+supabase: Client = create_client(supabase_url, supabase_key)
+
+# Security bearer token
+security = HTTPBearer()
+from datetime import datetime, date, timedelta
+from typing import Dict, Any, List, Optional
+from functools import lru_cache
 import logging
+import asyncio
+
+# Cache user data for 30 seconds to reduce Supabase API calls
+@lru_cache(maxsize=1)
+async def get_cached_user_data():
+    try:
+        # Get users from auth.users table with specific fields
+        users_response = supabase.table('auth.users').select(
+            'id,email,last_sign_in_at,created_at,updated_at,raw_user_meta_data,phone,app_metadata'
+        ).execute()
+        
+        if not users_response or not isinstance(users_response.data, list):
+            logger.error("Invalid response from auth.users table")
+            raise ValueError("Failed to fetch users data")
+        
+        users = users_response.data
+        
+        # Get user activity data with validation
+        activity_response = supabase.table('user_activity').select(
+            'user_id,last_active,status,metadata,session_id,device_info'
+        ).execute()
+        
+        if not activity_response:
+            logger.warning("No user activity data found")
+            activities = []
+        else:
+            activities = activity_response.data
+        
+        # Map activities by user_id with additional validation
+        activity_map = {}
+        for act in activities:
+            if 'user_id' in act:
+                activity_map[act['user_id']] = {
+                    'last_active': act.get('last_active'),
+                    'status': act.get('status', 'offline'),
+                    'metadata': act.get('metadata', {}),
+                    'session_id': act.get('session_id'),
+                    'device_info': act.get('device_info', {})
+                }
+        
+        # Process and combine user data with enhanced validation
+        processed_users = []
+        for user in users:
+            if not user.get('id'):
+                logger.warning(f"Skipping user without ID: {user}")
+                continue
+                
+            activity = activity_map.get(user['id'], {})
+            processed_users.append({
+                'id': user['id'],
+                'email': user.get('email', 'N/A'),
+                'phone': user.get('phone'),
+                'last_sign_in': user.get('last_sign_in_at'),
+                'created_at': user.get('created_at'),
+                'updated_at': user.get('updated_at'),
+                'raw_user_meta_data': user.get('raw_user_meta_data', {}),
+                'app_metadata': user.get('app_metadata', {}),
+                'last_active': activity.get('last_active'),
+                'status': activity.get('status', 'offline'),
+                'metadata': activity.get('metadata', {}),
+                'session_id': activity.get('session_id'),
+                'device_info': activity.get('device_info', {})
+            })
+        
+        logger.info(f"Successfully processed {len(processed_users)} users")
+        return {
+            'users': processed_users,
+            'total_users': len(users),
+            'active_users': len([u for u in processed_users if u['status'] == 'online']),
+            'timestamp': datetime.utcnow().isoformat(),
+            'cache_status': 'hit'
+        }
+    except Exception as e:
+        logger.error(f"Error fetching user data: {str(e)}")
+        return {
+            'users': [],
+            'total_users': 0,
+            'active_users': 0,
+            'error': str(e),
+            'timestamp': datetime.utcnow().isoformat(),
+            'cache_status': 'error'
+        }
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -23,13 +116,81 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Database configuration - Updated to use MySQL
+# Rate limiting settings
+REQUEST_LIMIT = 100  # Maximum requests per window
+TIME_WINDOW = 60  # Time window in seconds
+request_history = {}
+
+def check_rate_limit(client_id: str) -> bool:
+    now = datetime.utcnow()
+    if client_id not in request_history:
+        request_history[client_id] = []
+    
+    # Clean old requests
+    request_history[client_id] = [t for t in request_history[client_id] 
+                                 if (now - t).total_seconds() < TIME_WINDOW]
+    
+    if len(request_history[client_id]) >= REQUEST_LIMIT:
+        return False
+    
+    request_history[client_id].append(now)
+    return True
+
+@app.get("/supabase-users")
+async def get_supabase_users(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Get real-time Supabase user data with caching and rate limiting"""
+    try:
+        client_id = credentials.credentials[:16]  # Use part of the token as client ID
+        
+        # Check rate limit
+        if not check_rate_limit(client_id):
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "Too many requests",
+                    "retry_after": TIME_WINDOW,
+                    "limit": REQUEST_LIMIT,
+                    "window": f"{TIME_WINDOW} seconds"
+                }
+            )
+        
+        # Get cached user data
+        user_data = await get_cached_user_data()
+        
+        # Add request metadata
+        user_data['request_id'] = f"{datetime.utcnow().timestamp()}-{client_id}"
+        user_data['rate_limit'] = {
+            'remaining': REQUEST_LIMIT - len(request_history.get(client_id, [])),
+            'reset': TIME_WINDOW
+        }
+        
+        return user_data
+        
+    except ValueError as ve:
+        logger.error(f"Validation error in supabase-users endpoint: {ve}")
+        raise HTTPException(status_code=422, detail=str(ve))
+        
+    except HTTPException as he:
+        raise he  # Re-raise HTTP exceptions
+        
+    except Exception as e:
+        logger.error(f"Unexpected error in supabase-users endpoint: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Internal server error",
+                "message": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
+
+# Database configuration - Updated to use AWS MySQL
 DB_CONFIG = {
-    'host': '127.0.0.1',
-    'port': 3307,
+    'host': '54.149.111.114',
+    'port': 3306,
     'user': 'root',
     'password': 'thanuja',
-    'database': 'toolinformation'
+    'database': 'toolinfomation'
 }
 
 # File to store previous database size for growth calculation
@@ -248,22 +409,97 @@ async def get_jobs_info_endpoint():
     """Get job statistics"""
     return get_jobs_info()
 
+@lru_cache(maxsize=1)
+async def get_cached_user_data(cache_key: str) -> Dict[str, Any]:
+    """Cache user data for 30 seconds to reduce API calls"""
+    try:
+        response = supabase.table('auth.users').select('id, email, last_sign_in_at, created_at, updated_at, raw_user_meta_data').execute()
+        activity_response = supabase.table('user_activity').select('user_id, last_active, status, metadata').execute()
+        
+        return {
+            "users": response.data if response.data else [],
+            "activities": activity_response.data if activity_response.data else [],
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error fetching Supabase data: {e}")
+        return {"users": [], "activities": [], "timestamp": datetime.now().isoformat()}
+
+async def get_active_users():
+    """Get count of active users who have signed in within the last 15 minutes or have 'online' status"""
+    try:
+        # Get cached user data
+        user_data = await get_cached_user_data()
+        
+        # Get current time and time 15 minutes ago
+        now = datetime.utcnow()
+        fifteen_minutes_ago = now - timedelta(minutes=15)
+        
+        # Filter active users based on last sign in or online status
+        active_users = []
+        for user in user_data['users']:
+            last_sign_in = datetime.fromisoformat(user['last_sign_in'].replace('Z', '+00:00')) if user['last_sign_in'] else None
+            is_recently_active = last_sign_in and last_sign_in >= fifteen_minutes_ago
+            is_online = user['status'] == 'online'
+            
+            if is_recently_active or is_online:
+                active_users.append(user)
+        
+        return {
+            'count': len(active_users),
+            'users': active_users,
+            'total_users': user_data['total_users'],
+            'cache_status': user_data['cache_status'],
+            'timestamp': now.isoformat()
+        }
+    
+    except Exception as e:
+        logger.error(f"Error getting active users: {e}")
+        return {
+            'count': 0,
+            'users': [],
+            'total_users': 0,
+            'error': str(e),
+            'cache_status': 'error',
+            'timestamp': datetime.utcnow().isoformat()
+        }
+
+@app.get("/supabase-users")
+async def get_supabase_users(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Get real-time Supabase user data with caching"""
+    try:
+        user_data = await get_active_users()
+        logger.info(f"Supabase users request processed. Active users: {user_data['count']}")
+        return user_data
+    except Exception as e:
+        logger.error(f"Error fetching Supabase users: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/admin-metrics")
 async def get_all_metrics():
-    """Get all admin metrics in one call"""
+    """Get all admin metrics in one call with enhanced user tracking"""
     try:
         logger.info("Admin metrics request received")
         system_load = await get_system_load()
         database_size = get_database_size()
         jobs_info = get_jobs_info()
+        user_data = await get_active_users()
         
         result = {
             "system_load": system_load,
             "database_size": database_size,
             "jobs_info": jobs_info,
+            "active_users": {
+                "count": user_data["count"],
+                "total_users": user_data["total_users"],
+                "users": user_data["users"],
+                "error": user_data["error"],
+                "cache_status": user_data["cache_status"],
+                "last_updated": datetime.now().isoformat()
+            },
             "timestamp": datetime.now().isoformat()
         }
-        logger.info(f"Admin metrics response: {result}")
+        logger.info(f"Admin metrics response generated successfully")
         return result
     except Exception as e:
         logger.error(f"Error getting all metrics: {e}")
@@ -301,4 +537,4 @@ async def test_endpoint():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001) 
+    uvicorn.run(app, host="0.0.0.0", port=8001)

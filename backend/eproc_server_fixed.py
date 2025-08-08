@@ -18,13 +18,13 @@ from selenium.webdriver.edge.options import Options
 from scrapers.search import run_eproc_scraper_with_bot
 from database_operations_mysql import EProcurementDBMySQL
 
-# Set environment variables directly for MySQL connection
+# Set environment variables directly for MySQL connection (AWS)
 import os
-os.environ['DB_HOST'] = 'localhost'
-os.environ['DB_PORT'] = '3307'
+os.environ['DB_HOST'] = '54.149.111.114'
+os.environ['DB_PORT'] = '3306'
 os.environ['DB_USER'] = 'root'
 os.environ['DB_PASSWORD'] = 'thanuja'
-os.environ['DB_NAME'] = 'toolinformation'
+os.environ['DB_NAME'] = 'toolinfomation'
 
 app = Flask(__name__)
 CORS(app)
@@ -194,9 +194,11 @@ def open_edge():
         url = build_advanced_search_url(data.get('url', ''))
         print(f"[DEBUG] Final Edge URL: {url}")
 
-        edge_driver_path = r'D:\lavangam\lavangam\backend\scrapers\edgedriver_win64\msedgedriver.exe'
+        edge_driver_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scrapers', 'edgedriver_win64', 'msedgedriver.exe')
+        print(f"[DEBUG] Checking Edge WebDriver at: {edge_driver_path}")
+        print(f"[DEBUG] Edge WebDriver exists: {os.path.exists(edge_driver_path)}")
         if not os.path.exists(edge_driver_path):
-            return jsonify({'error': 'Edge WebDriver not found!'}), 500
+            return jsonify({'error': f'Edge WebDriver not found at {edge_driver_path}'}), 500
 
         options = Options()
         # options.add_argument('--user-data-dir=...')  # Optional: use a persistent profile

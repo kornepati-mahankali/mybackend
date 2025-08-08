@@ -27,12 +27,18 @@ const AdminMetricsTest: React.FC = () => {
     const fetchMetrics = async () => {
       try {
         setLoading(true);
-        const response = await axios.get<AdminMetrics>('http://localhost:8001/admin-metrics');
-        setMetrics(response.data);
         setError('');
-      } catch (err) {
-        console.error('API Error:', err);
-        setError('Failed to connect to admin metrics API');
+        
+        // Use admin metrics API on port 8001
+        const API_BASE_URL = window.location.hostname === 'localhost' 
+          ? 'http://localhost:8001'
+          : 'https://lavangam-minimal-backend-env.eba-22qprjmg.us-east-1.elasticbeanstalk.com';
+        
+        const response = await axios.get<AdminMetrics>(`${API_BASE_URL}/admin-metrics`);
+        setMetrics(response.data);
+      } catch (err: any) {
+        console.error('Failed to fetch admin metrics:', err);
+        setError(err.response?.data?.detail || err.message || 'Failed to fetch metrics');
       } finally {
         setLoading(false);
       }
@@ -56,7 +62,7 @@ const AdminMetricsTest: React.FC = () => {
       <div className="p-4 bg-red-100 border border-red-400 rounded">
         <p className="text-red-700">❌ {error}</p>
         <p className="text-red-600 text-sm mt-2">
-          Make sure the admin metrics API is running on http://localhost:8001
+          Make sure the admin metrics API is running on the backend server
         </p>
       </div>
     );

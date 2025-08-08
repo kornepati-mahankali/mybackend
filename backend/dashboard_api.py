@@ -7,10 +7,12 @@ from datetime import datetime, date, timedelta
 from typing import Dict, Any, List
 import logging
 import asyncio
+import time
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 import psutil
 from decimal import Decimal
+import glob
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -29,11 +31,11 @@ app.add_middleware(
 
 # Database configuration
 DB_CONFIG = {
-    'host': '127.0.0.1',
-    'port': 3307,
+    'host': '54.149.111.114',
+    'port': 3306,
     'user': 'root',
     'password': 'thanuja',
-    'database': 'toolinformation'
+    'database': 'toolinfomation'
 }
 
 def get_db_connection():
@@ -218,6 +220,111 @@ def get_system_status() -> Dict[str, Any]:
             "queue_system": {"status": "error", "uptime": "0%"}
         }
 
+def get_database_size() -> Dict[str, Any]:
+    """Get database size information"""
+    try:
+        connection = get_db_connection()
+        
+        with connection:
+            with connection.cursor() as cursor:
+                # Get database size
+                cursor.execute("""
+                    SELECT 
+                        ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) AS 'size_mb',
+                        ROUND(SUM(data_length + index_length) / 1024 / 1024 / 1024, 2) AS 'size_gb'
+                    FROM information_schema.tables 
+                    WHERE table_schema = %s
+                """, (DB_CONFIG['database'],))
+                
+                result = cursor.fetchone()
+                if result and result['size_mb']:
+                    size_mb = result['size_mb']
+                    size_gb = result['size_gb']
+                    
+                    # Format size
+                    if size_gb >= 1:
+                        total_size = f"{size_gb:.2f}GB"
+                    else:
+                        total_size = f"{size_mb:.2f}MB"
+                    
+                    return {
+                        "total_size": total_size,
+                        "total_size_bytes": int(size_mb * 1024 * 1024),
+                        "today_growth": "0B",  # Placeholder
+                        "today_growth_bytes": 0,
+                        "growth_percentage": 0.0
+                    }
+                else:
+                    return {
+                        "total_size": "0B",
+                        "total_size_bytes": 0,
+                        "today_growth": "0B",
+                        "today_growth_bytes": 0,
+                        "growth_percentage": 0.0
+                    }
+    except Exception as e:
+        logger.error(f"Error getting database size: {e}")
+        return {
+            "total_size": "0B",
+            "total_size_bytes": 0,
+            "today_growth": "0B",
+            "today_growth_bytes": 0,
+            "growth_percentage": 0.0,
+            "error": str(e)
+        }
+
+def get_jobs_info() -> Dict[str, Any]:
+    """Get jobs information"""
+    try:
+        connection = get_db_connection()
+        
+        with connection:
+            with connection.cursor() as cursor:
+                # Check if jobs table exists
+                cursor.execute("""
+                    SELECT COUNT(*) as table_exists 
+                    FROM information_schema.tables 
+                    WHERE table_schema = %s AND table_name = 'jobs'
+                """, (DB_CONFIG['database'],))
+                
+                result = cursor.fetchone()
+                if not result or result['table_exists'] == 0:
+                    # Return mock data if jobs table doesn't exist
+                    return {
+                        "active_jobs": 0,
+                        "queued_jobs": 0,
+                        "completed_jobs": 0,
+                        "total_jobs": 0,
+                        "note": "Jobs table not found"
+                    }
+                
+                # Get job counts
+                cursor.execute("""
+                    SELECT 
+                        COUNT(CASE WHEN status = 'active' OR status = 'running' THEN 1 END) as active_jobs,
+                        COUNT(CASE WHEN status = 'queued' THEN 1 END) as queued_jobs,
+                        COUNT(CASE WHEN status = 'completed' OR status = 'success' THEN 1 END) as completed_jobs,
+                        COUNT(*) as total_jobs
+                    FROM jobs
+                """)
+                
+                result = cursor.fetchone()
+                return {
+                    "active_jobs": result['active_jobs'] or 0,
+                    "queued_jobs": result['queued_jobs'] or 0,
+                    "completed_jobs": result['completed_jobs'] or 0,
+                    "total_jobs": result['total_jobs'] or 0
+                }
+    except Exception as e:
+        logger.error(f"Error getting jobs info: {e}")
+        return {
+            "active_jobs": 0,
+            "queued_jobs": 0,
+            "completed_jobs": 0,
+            "total_jobs": 0,
+            "error": str(e)
+        }
+
 @app.get("/api/dashboard/metrics")
 async def get_dashboard_metrics_endpoint():
     """Get all dashboard metrics"""
@@ -363,6 +470,54 @@ async def get_system_status_endpoint():
         status = get_system_status()
         return {"system_status": status}
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/admin-metrics")
+async def get_admin_metrics():
+    """Get all admin metrics in one call"""
+    try:
+        logger.info("Admin metrics request received")
+        system_load = get_system_status()
+        database_size = get_database_size()
+        jobs_info = get_jobs_info()
+        
+        result = {
+            "system_load": system_load,
+            "database_size": database_size,
+            "jobs_info": jobs_info,
+            "timestamp": datetime.now().isoformat()
+        }
+        logger.info(f"Admin metrics response generated successfully")
+        return result
+    except Exception as e:
+        logger.error(f"Error getting all metrics: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get metrics: {str(e)}")
+
+@app.get("/admin/system-load")
+async def get_system_load():
+    """Get system load information"""
+    try:
+        return get_system_status()
+    except Exception as e:
+        logger.error(f"Error getting system load: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/database-size")
+async def get_database_size_endpoint():
+    """Get database size information"""
+    try:
+        return get_database_size()
+    except Exception as e:
+        logger.error(f"Error getting database size: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/jobs-info")
+async def get_jobs_info_endpoint():
+    """Get jobs information"""
+    try:
+        return get_jobs_info()
+    except Exception as e:
+        logger.error(f"Error getting jobs info: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")

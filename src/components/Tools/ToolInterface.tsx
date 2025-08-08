@@ -60,6 +60,9 @@ function getFileNameOnly(file: string) {
 }
 
 export const ToolInterface: React.FC<ToolInterfaceProps> = ({ tool, onBack }) => {
+  // Use context state for GEM tool, local state for others
+  const { state: toolState, setState: setToolState } = useToolState();
+  
   // Simplified state management - use local state for all tools
   const [state, setState] = useState<any>({
     inputValues: {},
@@ -75,16 +78,23 @@ export const ToolInterface: React.FC<ToolInterfaceProps> = ({ tool, onBack }) =>
     jobData: {},
     scrapingJobs: [],
     stopMessage: '',
-    isStopping: false
+    isStopping: false,
+    sockets: {} // Store separate sockets for each state
   });
 
-  // Check if this is a GEM tool
+  // For GEM tool, use context state
   const isGem = tool.name === 'gem';
+  const gemState = isGem ? toolState.gem : null;
+  const setGemState = isGem ? (updater: any) => setToolState(prev => ({ ...prev, gem: updater(prev.gem) })) : null;
   
   // Move activeJobState to context
-  const activeJobState = state.activeJobState;
+  const activeJobState = isGem ? gemState?.activeJobState : state.activeJobState;
   const setActiveJobState = (jobState: string | null) => {
+    if (isGem && setGemState) {
+      setGemState((prev: any) => ({ ...prev, activeJobState: jobState }));
+    } else {
     setState((prev: any) => ({ ...prev, activeJobState: jobState }));
+    }
   };
 
   // On mount or when jobs change, set activeJobState if not set
@@ -103,6 +113,19 @@ export const ToolInterface: React.FC<ToolInterfaceProps> = ({ tool, onBack }) =>
 
   // Add scrapingJobs state
   const [scrapingJobs, setScrapingJobs] = useState<{ state: string, status: 'in-progress' | 'complete' }[]>([]);
+  
+  // For GEM tool, use context state for scrapingJobs
+  const getScrapingJobs = () => {
+    return isGem && gemState ? gemState.scrapingJobs : scrapingJobs;
+  };
+  
+  const setScrapingJobsWrapper = (updater: any) => {
+    if (isGem && setGemState) {
+      setGemState((prev: any) => ({ ...prev, scrapingJobs: updater(prev.scrapingJobs) }));
+    } else {
+      setScrapingJobs(updater);
+    }
+  };
   // Remove local jobData state
   // const [jobData, setJobData] = useState<Record<string, {
   //   inputValues: { [key: string]: string },
@@ -115,9 +138,13 @@ export const ToolInterface: React.FC<ToolInterfaceProps> = ({ tool, onBack }) =>
   //   stopMessage: string
   // }>>({});
   // Use context for jobData
-  const jobData = state.jobData;
+  const jobData = isGem ? gemState?.jobData : state.jobData;
   const setJobData = (updater: (prev: typeof jobData) => typeof jobData) => {
+    if (isGem && setGemState) {
+      setGemState((prev: any) => ({ ...prev, jobData: updater(prev.jobData) }));
+    } else {
     setState((prev: any) => ({ ...prev, jobData: updater(prev.jobData) }));
+    }
   };
 
   // Add validStates array at the top (should match backend order)
@@ -205,9 +232,194 @@ export const ToolInterface: React.FC<ToolInterfaceProps> = ({ tool, onBack }) =>
 
   // Add WebSocket event listener for instant output file updates
   useEffect(() => {
-    if (!state.socket) return;
+    // Set up event handlers for all active sockets
+    const setupSocketHandlers = (socket: any, stateName: string) => {
+      if (!socket) return;
+      
+      console.log(`🔌 Setting up WebSocket event listeners for state: ${stateName}`);
+      
+      const handleFileWritten = (data: { filename: string, run_id: string }) => {
+        console.log(`📁 File written event received for ${stateName}:`, data);
+        // Extract just the filename from the full path if needed
+        const filename = data.filename.includes('/') || data.filename.includes('\\') 
+          ? data.filename.split(/[/\\]/).pop() || data.filename 
+          : data.filename;
+        
+        // Update job-specific state
+        if (isGem && setGemState) {
+          setGemState((prev: any) => ({
+            ...prev,
+            jobData: {
+              ...prev.jobData,
+              [stateName]: {
+                ...prev.jobData[stateName],
+                outputFiles: prev.jobData[stateName]?.outputFiles && !prev.jobData[stateName].outputFiles.includes(filename)
+                  ? [...prev.jobData[stateName].outputFiles, filename]
+                  : prev.jobData[stateName]?.outputFiles || [filename]
+              }
+            }
+          }));
+        } else {
+          setJobData((prev: any) => ({
+            ...prev,
+            [stateName]: {
+              ...prev[stateName],
+              outputFiles: prev[stateName]?.outputFiles && !prev[stateName].outputFiles.includes(filename)
+                ? [...prev[stateName].outputFiles, filename]
+                : prev[stateName]?.outputFiles || [filename]
+            }
+          }));
+        }
+        
+        // Also update global state if this is the active job
+        if (activeJobState === stateName) {
+          if (isGem && setGemState) {
+            setGemState((prev: any) => ({
+              ...prev,
+              outputFiles: prev.outputFiles && !prev.outputFiles.includes(filename)
+                ? [...prev.outputFiles, filename]
+                : prev.outputFiles || [filename]
+            }));
+          } else {
+            setState((prev: any) => ({
+              ...prev,
+              outputFiles: prev.outputFiles && !prev.outputFiles.includes(filename)
+                ? [...prev.outputFiles, filename]
+                : prev.outputFiles || [filename]
+            }));
+          }
+        }
+      };
+      
+      const handleScrapingOutput = (data: { output: string }) => {
+        console.log(`📝 Scraping output received for ${stateName}:`, data.output);
+        
+        // Update job-specific state
+        if (isGem && setGemState) {
+          setGemState((prev: any) => ({
+            ...prev,
+            jobData: {
+              ...prev.jobData,
+              [stateName]: {
+                ...prev.jobData[stateName],
+                log: (prev.jobData[stateName]?.log || '') + data.output + '\n',
+                isRunning: data.output.includes('SCRAPING COMPLETED') ? false : true,
+                isScrapingComplete: data.output.includes('SCRAPING COMPLETED') ? true : prev.jobData[stateName]?.isScrapingComplete
+              }
+            }
+          }));
+        } else {
+          setJobData((prev: any) => {
+            const job = prev[stateName] || {};
+            return {
+              ...prev,
+              [stateName]: {
+                ...job,
+                log: (job.log || '') + data.output + '\n',
+                isRunning: data.output.includes('SCRAPING COMPLETED') ? false : true,
+                isScrapingComplete: data.output.includes('SCRAPING COMPLETED') ? true : job.isScrapingComplete
+              }
+            };
+          });
+        }
+        
+        // Also update global state if this is the active job
+        if (activeJobState === stateName) {
+          if (isGem && setGemState) {
+            setGemState((prev: any) => ({
+              ...prev,
+              log: (prev.log || '') + data.output + '\n',
+              isRunning: data.output.includes('SCRAPING COMPLETED') ? false : true,
+              isScrapingComplete: data.output.includes('SCRAPING COMPLETED') ? true : prev.isScrapingComplete
+            }));
+          } else {
+            setState((prev: any) => ({
+              ...prev,
+              log: (prev.log || '') + data.output + '\n',
+              isRunning: data.output.includes('SCRAPING COMPLETED') ? false : true,
+              isScrapingComplete: data.output.includes('SCRAPING COMPLETED') ? true : prev.isScrapingComplete
+            }));
+          }
+        }
+        
+        // Update scrapingJobs status when scraping completes
+        if (data.output.includes('SCRAPING COMPLETED')) {
+          setScrapingJobsWrapper(jobs => 
+            jobs.map(job => 
+              job.state === stateName 
+                ? { ...job, status: 'complete' as const }
+                : job
+            )
+          );
+        }
+      };
+
+      const handleOutput = (data: string) => {
+        console.log(`📝 Raw output received for ${stateName}:`, data);
+        
+        // Update job-specific state
+        setJobData((prev: any) => {
+          const job = prev[stateName] || {};
+          return {
+            ...prev,
+            [stateName]: {
+              ...job,
+              log: (job.log || '') + data + '\n',
+              isRunning: data.includes('SCRAPING COMPLETED') ? false : true,
+              isScrapingComplete: data.includes('SCRAPING COMPLETED') ? true : job.isScrapingComplete
+            }
+          };
+        });
+        
+        // Also update global state if this is the active job
+        if (activeJobState === stateName) {
+          setState((prev: any) => ({
+            ...prev,
+            log: (prev.log || '') + data + '\n',
+            isRunning: data.includes('SCRAPING COMPLETED') ? false : true,
+            isScrapingComplete: data.includes('SCRAPING COMPLETED') ? true : prev.isScrapingComplete
+          }));
+        }
+        
+        // Update scrapingJobs status when scraping completes
+        if (data.includes('SCRAPING COMPLETED')) {
+          setScrapingJobsWrapper(jobs => 
+            jobs.map(job => 
+              job.state === stateName 
+                ? { ...job, status: 'complete' as const }
+                : job
+            )
+          );
+        }
+      };
+      
+      socket.on('file_written', handleFileWritten);
+      socket.on('scraping_output', handleScrapingOutput);
+      socket.on('output', handleOutput);
+      socket.on('message', (data: any) => {
+        console.log(`📨 Raw message received for ${stateName}:`, data);
+        if (typeof data === 'string' && data.startsWith('OUTPUT:')) {
+          handleOutput(data);
+        }
+      });
+      
+      // Return cleanup function
+      return () => {
+        console.log(`🔌 Cleaning up WebSocket event listeners for ${stateName}`);
+        socket.off('file_written', handleFileWritten);
+        socket.off('scraping_output', handleScrapingOutput);
+        socket.off('output', handleOutput);
+        socket.off('message');
+      };
+    };
     
-    console.log('🔌 Setting up WebSocket event listeners for file updates');
+    // Set up handlers for all active sockets
+    const cleanupFunctions: (() => void)[] = [];
+    const socketsToUse = isGem && gemState ? gemState.sockets : state.sockets;
+    Object.entries(socketsToUse || {}).forEach(([stateName, socket]) => {
+      const cleanup = setupSocketHandlers(socket, stateName);
+      if (cleanup) cleanupFunctions.push(cleanup);
+    });
     
     // Set up polling for output files when scraping is running
     let pollInterval: NodeJS.Timeout | null = null;
@@ -282,6 +494,17 @@ export const ToolInterface: React.FC<ToolInterfaceProps> = ({ tool, onBack }) =>
               }
             };
           });
+          
+          // Update scrapingJobs status when scraping completes
+          if (data.output.includes('SCRAPING COMPLETED')) {
+            setScrapingJobs(jobs => 
+              jobs.map(job => 
+                job.state === activeJobState 
+                  ? { ...job, status: 'complete' as const }
+                  : job
+              )
+            );
+          }
         }
       };
 
@@ -309,32 +532,32 @@ export const ToolInterface: React.FC<ToolInterfaceProps> = ({ tool, onBack }) =>
               }
             };
           });
+          
+          // Update scrapingJobs status when scraping completes
+          if (data.includes('SCRAPING COMPLETED')) {
+            setScrapingJobs(jobs => 
+              jobs.map(job => 
+                job.state === activeJobState 
+                  ? { ...job, status: 'complete' as const }
+                  : job
+              )
+            );
+          }
         }
       };
       
-      state.socket.on('file_written', handleFileWritten);
-      state.socket.on('scraping_output', handleScrapingOutput);
-      state.socket.on('output', handleOutput);
-      state.socket.on('message', (data: any) => {
-        console.log('📨 Raw message received:', data);
-        if (typeof data === 'string' && data.startsWith('OUTPUT:')) {
-          handleOutput(data);
-        }
-      });
-      
       return () => {
         console.log('🔌 Cleaning up WebSocket event listeners');
-        state.socket.off('file_written', handleFileWritten);
-        state.socket.off('scraping_output', handleScrapingOutput);
-        state.socket.off('output', handleOutput);
-        state.socket.off('message');
+        
+        // Clean up all socket handlers
+        cleanupFunctions.forEach(cleanup => cleanup());
         
         // Clean up polling interval
         if (pollInterval) {
           clearInterval(pollInterval);
         }
       };
-  }, [state.socket, activeJobState]);
+  }, [isGem ? gemState?.sockets : state.sockets, activeJobState]);
 
   // Replace all useState for Gem Tool with context state
   // Example: state.inputValues, state.selectedState, etc.
@@ -554,31 +777,49 @@ export const ToolInterface: React.FC<ToolInterfaceProps> = ({ tool, onBack }) =>
       days_interval: state.inputValues['days_interval'],
       run_id: newRunId
     };
-    // Change the socket connection to use port 5003
-    console.log('Connecting to WebSocket server on port 5003...');
+    
+    // Create separate WebSocket connection for this state
+    console.log(`Connecting to WebSocket server for state: ${state.selectedState}...`);
     const sock = io('http://127.0.0.1:5003');
     
     // Add connection event handlers for debugging
     sock.on('connect', () => {
-      console.log('✅ WebSocket connected successfully');
-      setState(prev => ({ ...prev, log: (prev.log || '') + '\n[INFO] WebSocket connected successfully\n' }));
+      console.log(`✅ WebSocket connected successfully for state: ${state.selectedState}`);
+      setState(prev => ({ ...prev, log: (prev.log || '') + `\n[INFO] WebSocket connected successfully for ${state.selectedState}\n` }));
     });
     
     sock.on('connect_error', (error: any) => {
-      console.error('❌ WebSocket connection failed:', error);
-      setState(prev => ({ ...prev, log: (prev.log || '') + `\n[ERROR] WebSocket connection failed: ${error.message}\n` }));
+      console.error(`❌ WebSocket connection failed for state ${state.selectedState}:`, error);
+      setState(prev => ({ ...prev, log: (prev.log || '') + `\n[ERROR] WebSocket connection failed for ${state.selectedState}: ${error.message}\n` }));
       setState(prev => ({ ...prev, isRunning: false }));
     });
     
-    setState(prev => ({ ...prev, socket: sock }));
+    // Store socket for this specific state
+    if (isGem && setGemState) {
+      setGemState(prev => ({ 
+        ...prev, 
+        sockets: { 
+          ...prev.sockets, 
+          [state.selectedState]: sock 
+        } 
+      }));
+    } else {
+      setState(prev => ({ 
+        ...prev, 
+        sockets: { 
+          ...prev.sockets, 
+          [state.selectedState]: sock 
+        } 
+      }));
+    }
     
     // Wait for connection before emitting
     if (sock.connected) {
-      console.log('Socket already connected, emitting start_scraping...');
+      console.log(`Socket already connected for ${state.selectedState}, emitting start_scraping...`);
       sock.emit('start_scraping', payload);
     } else {
       sock.on('connect', () => {
-        console.log('Socket connected, now emitting start_scraping...');
+        console.log(`Socket connected for ${state.selectedState}, now emitting start_scraping...`);
         sock.emit('start_scraping', payload);
       });
     }
@@ -586,12 +827,31 @@ export const ToolInterface: React.FC<ToolInterfaceProps> = ({ tool, onBack }) =>
     // Add a timeout to check if connection fails
     setTimeout(() => {
       if (!sock.connected) {
-        console.error('❌ WebSocket connection timeout');
-        setState(prev => ({ ...prev, log: (prev.log || '') + '\n[ERROR] WebSocket connection timeout\n' }));
+        console.error(`❌ WebSocket connection timeout for ${state.selectedState}`);
+        setState(prev => ({ ...prev, log: (prev.log || '') + `\n[ERROR] WebSocket connection timeout for ${state.selectedState}\n` }));
         setState(prev => ({ ...prev, isRunning: false }));
       }
     }, 5000);
     setActiveJobState(state.selectedState);
+    if (isGem && setGemState) {
+      setGemState(prev => ({
+        ...prev,
+        activeJobState: state.selectedState,
+        jobData: {
+          ...prev.jobData,
+          [state.selectedState]: {
+            inputValues: { ...state.inputValues },
+            selectedCity: state.selectedCity,
+            log: '',
+            isRunning: true,
+            isScrapingComplete: false,
+            runId: newRunId,
+            outputFiles: [],
+            stopMessage: ''
+          }
+        }
+      }));
+    } else {
     setJobData(prev => ({
       ...prev,
       [state.selectedState]: {
@@ -605,13 +865,43 @@ export const ToolInterface: React.FC<ToolInterfaceProps> = ({ tool, onBack }) =>
         stopMessage: ''
       }
     }));
+    }
     // Note: WebSocket event handlers are set up globally in useEffect above
     // No need to duplicate them here
     sock.on('disconnect', () => {
+      console.log(`WebSocket disconnected for state: ${state.selectedState}`);
+      // Update job-specific state
+      if (isGem && setGemState) {
+        setGemState(prev => ({
+          ...prev,
+          jobData: {
+            ...prev.jobData,
+            [state.selectedState]: {
+              ...prev.jobData[state.selectedState],
+              isRunning: false
+            }
+          }
+        }));
+        // Only update global state if this is the active job
+        if (activeJobState === state.selectedState) {
+          setGemState(prev => ({ ...prev, isRunning: false }));
+        }
+      } else {
+        setJobData(prev => ({
+          ...prev,
+          [state.selectedState]: {
+            ...prev[state.selectedState],
+            isRunning: false
+          }
+        }));
+        // Only update global state if this is the active job
+        if (activeJobState === state.selectedState) {
       setState(prev => ({ ...prev, isRunning: false }));
+        }
+      }
     });
     // Add or update job in scrapingJobs
-    setScrapingJobs(jobs => {
+    setScrapingJobsWrapper(jobs => {
       // If state already exists, set to in-progress
       if (jobs.some(job => job.state === state.selectedState)) {
         return jobs.map(job => job.state === state.selectedState ? { ...job, status: 'in-progress' } : job);
@@ -650,9 +940,53 @@ export const ToolInterface: React.FC<ToolInterfaceProps> = ({ tool, onBack }) =>
       }
     } else {
       // For non-IREPS tools
-      if (state.socket) {
-        state.socket.disconnect();
-        setState(prev => ({ ...prev, socket: null }));
+      if (activeJobState) {
+        const socketsToUse = isGem && gemState ? gemState.sockets : state.sockets;
+        if (socketsToUse && socketsToUse[activeJobState]) {
+          // Disconnect the specific socket for the active job
+          socketsToUse[activeJobState].disconnect();
+          
+          if (isGem && setGemState) {
+            setGemState(prev => ({ 
+              ...prev, 
+              sockets: {
+                ...prev.sockets,
+                [activeJobState]: null
+              }
+            }));
+            
+            // Update job-specific state
+            setGemState(prev => ({
+              ...prev,
+              jobData: {
+                ...prev.jobData,
+                [activeJobState]: {
+                  ...prev.jobData[activeJobState],
+                  isRunning: false,
+                  isScrapingComplete: true
+                }
+              }
+            }));
+          } else {
+            setState(prev => ({ 
+              ...prev, 
+              sockets: {
+                ...prev.sockets,
+                [activeJobState]: null
+              }
+            }));
+            
+            // Update job-specific state
+            setJobData(prev => ({
+              ...prev,
+              [activeJobState]: {
+                ...prev[activeJobState],
+                isRunning: false,
+                isScrapingComplete: true
+              }
+            }));
+          }
+        }
       }
       // Send stop request to backend
       try {
@@ -1612,18 +1946,23 @@ export const ToolInterface: React.FC<ToolInterfaceProps> = ({ tool, onBack }) =>
       <h2 className="text-2xl font-bold text-gray-900 dark:text-white">{tool.name}</h2>
       <p className="text-gray-700 dark:text-gray-400 mb-4">{tool.description}</p>
       {/* Scraping Jobs Navigation Bar */}
-      {scrapingJobs && scrapingJobs.length > 0 && (
+      {getScrapingJobs() && getScrapingJobs().length > 0 && (
         <div className="flex gap-2 mb-4">
-          {scrapingJobs.map((job: any) => (
+          {getScrapingJobs().map((job: any) => (
             <span
               key={job.state}
               onClick={() => {
                 setActiveJobState(job.state);
                 // Restore form fields for this job
-                const jobInfo = jobData[job.state];
+                const jobInfo = isGem ? gemState?.jobData[job.state] : jobData[job.state];
                 if (jobInfo) {
+                  if (isGem && setGemState) {
+                    setGemState((prev: any) => ({ ...prev, inputValues: { ...jobInfo.inputValues } }));
+                    setGemState((prev: any) => ({ ...prev, selectedCity: jobInfo.selectedCity }));
+                  } else {
                   setState((prev: any) => ({ ...prev, inputValues: { ...jobInfo.inputValues } }));
                   setState((prev: any) => ({ ...prev, selectedCity: jobInfo.selectedCity }));
+                  }
                 }
               }}
               className={`px-3 py-1 rounded text-white font-semibold cursor-pointer ${job.status === 'in-progress' ? 'bg-blue-500' : 'bg-green-500'} ${activeJobState === job.state ? 'ring-2 ring-violet-400' : ''}`}

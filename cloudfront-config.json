@@ -1,0 +1,33 @@
+{
+    "CallerReference": "lavangam-app-2024",
+    "Comment": "Lavangam App Distribution",
+    "DefaultRootObject": "index.html",
+    "Origins": {
+        "Quantity": 1,
+        "Items": [
+            {
+                "Id": "S3-lavangam-app-us-west-2",
+                "DomainName": "lavangam-app-us-west-2.s3.us-west-2.amazonaws.com",
+                "S3OriginConfig": {
+                    "OriginAccessIdentity": ""
+                }
+            }
+        ]
+    },
+    "DefaultCacheBehavior": {
+        "TargetOriginId": "S3-lavangam-app-us-west-2",
+        "ViewerProtocolPolicy": "redirect-to-https",
+        "TrustedSigners": {
+            "Enabled": false,
+            "Quantity": 0
+        },
+        "ForwardedValues": {
+            "QueryString": false,
+            "Cookies": {
+                "Forward": "none"
+            }
+        },
+        "MinTTL": 0
+    },
+    "Enabled": true
+} 

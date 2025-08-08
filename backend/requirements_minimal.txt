@@ -1,0 +1,4 @@
+# Minimal requirements for AWS deployment
+FastAPI==0.104.1
+uvicorn==0.24.0
+gunicorn==21.2.0 

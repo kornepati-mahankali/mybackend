@@ -578,33 +578,44 @@ def ireps_merge_download(session_id: str):
         merged_df = merged_df.dropna(how='all')
         # Remove duplicate rows
         merged_df = merged_df.drop_duplicates()
-        # Rename columns to match tender table
+        # Rename columns to match existing MySQL `tender` table structure
         column_rename_map = {
             'Deptt./Rly. Unit': 'department',
-            'Tender No': 'tender_no',
-            'Tender Title': 'tender_title',
-            'Status': 'status',
-            'Work Area': 'work_area',
-            'Due Date/Time': 'due_datetime'
+            'Tender No': 'tender_id',
+            'Tender Title': 'name_of_work',
+            'Work Area': 'location',
+            'Due Date/Time': 'closing_date',
+            'Website': 'website'  # if present
         }
         merged_df.rename(columns=column_rename_map, inplace=True)
-        # Keep only the columns needed for the database
-        valid_columns = ['department', 'tender_no', 'tender_title', 'status', 'work_area', 'due_datetime']
+
+        # Normalize date format for closing_date to YYYY-MM-DD
+        if 'closing_date' in merged_df.columns:
+            try:
+                merged_df['closing_date'] = merged_df['closing_date'].astype(str).str.slice(0, 10)
+            except Exception:
+                pass
+
+        # Keep only columns that exist in `tender` table
+        valid_columns = [
+            'tender_id', 'name_of_work', 'department', 'location', 'closing_date', 'website'
+        ]
         merged_df = merged_df[[col for col in merged_df.columns if col in valid_columns]]
+
         # Save as CSV (for download)
         output_csv_file = os.path.join(OUTPUTDIR, f"merged_data_{session_id}.csv")
         merged_df.to_csv(output_csv_file, index=False)
         print(f"[DEBUG] Merged CSV file saved to: {output_csv_file}")
         
-        # Insert into MySQL tender table
+        # Insert into MySQL tender table (AWS) with existing columns only
         if not merged_df.empty:
             try:
                 connection = pymysql.connect(
-                    host='127.0.0.1',
-                    port=3307,
+                    host='54.149.111.114',
+                    port=3306,
                     user='root',
                     password='thanuja',
-                    db='toolinformation',
+                    db='toolinfomation',
                     charset='utf8mb4',
                     cursorclass=pymysql.cursors.DictCursor
                 )
@@ -616,9 +627,9 @@ def ireps_merge_download(session_id: str):
                         for row in merged_df.itertuples(index=False, name=None):
                             cursor.execute(sql, row)
                     connection.commit()
-                    print(f"[SUCCESS] Inserted {len(merged_df)} rows into tender table")
+                    print(f"[SUCCESS] Inserted {len(merged_df)} rows into tender table (AWS)")
             except Exception as e:
-                print(f"[ERROR] Failed to insert merged data into tender: {e}")
+                print(f"[ERROR] Failed to insert merged data into tender (AWS): {e}")
         
         from fastapi.responses import FileResponse
         return FileResponse(

@@ -12,7 +12,9 @@ interface SystemLoadData {
   timestamp: string;
 }
 
-const API_URL = "http://localhost:8001/system-load"; // Admin metrics API endpoint
+import { API_CONFIG } from '../config/api';
+
+const API_URL = `${API_CONFIG.SYSTEM_API}/system-load`; // Admin metrics API endpoint
 
 const SystemUsageChart = () => {
   const [data, setData] = useState<any[]>([]);

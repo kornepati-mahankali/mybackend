@@ -49,6 +49,7 @@ export type GemToolState = {
     stopMessage: string
   }>;
   socket: any | null;
+  sockets: Record<string, any>; // Store separate sockets for each state
 };
 
 export type ToolState = {
@@ -85,6 +86,7 @@ const defaultGemState: GemToolState = {
   activeJobState: null,
   jobData: {},
   socket: null,
+  sockets: {}, // Initialize empty sockets object
 };
 
 const defaultState: ToolState = {

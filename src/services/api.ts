@@ -1,6 +1,15 @@
 // API service for backend integration
-// Force using port 8000 for now since the backend is running there
-const API_BASE_URL = 'http://localhost:8000';
+import { API_CONFIG } from '../config/api';
+
+const API_BASE_URL = API_CONFIG.MAIN_API;
+
+// Unified API endpoints - all services are now under one domain
+const API_ENDPOINTS = {
+  main: '/main',
+  scrapers: '/scrapers', 
+  system: '/system',
+  dashboard: '/dashboard'
+};
 
 // Add a cache-busting parameter to force fresh requests
 const CACHE_BUSTER = `?v=${Date.now()}`;
@@ -74,7 +83,7 @@ class ApiService {
   }
 
   async getSupabaseUsers() {
-    return this.request<{ users: any[] }>('/api/admin/supabase-users');
+    return this.request<{ users: any[] }>('/main/api/admin/supabase-users');
   }
 
   async updateUserRole(userId: string, role: string) {
@@ -277,7 +286,7 @@ class ApiService {
   }
 
   async getSystemMetrics() {
-    return this.request('/admin/system-metrics');
+    return this.request('/system/api/system-usage');
   }
 
   // Export user data
@@ -287,11 +296,11 @@ class ApiService {
       throw new Error('No authentication token found');
     }
 
-    console.log('🌐 Exporting data from:', `${API_BASE_URL}/api/export-data${CACHE_BUSTER}`);
+    console.log('🌐 Exporting data from:', `${API_BASE_URL}/main/api/export-data${CACHE_BUSTER}`);
     console.log('🔑 Token found:', !!token);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/export-data${CACHE_BUSTER}`, {
+      const response = await fetch(`${API_BASE_URL}/main/api/export-data${CACHE_BUSTER}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -354,11 +363,11 @@ class ApiService {
       throw new Error('No authentication token found');
     }
 
-    console.log('🌐 Exporting files from:', `${API_BASE_URL}/api/export-files${CACHE_BUSTER}`);
+    console.log('🌐 Exporting files from:', `${API_BASE_URL}/main/api/export-files${CACHE_BUSTER}`);
     console.log('🔑 Token found:', !!token);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/export-files${CACHE_BUSTER}`, {
+      const response = await fetch(`${API_BASE_URL}/main/api/export-files${CACHE_BUSTER}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
